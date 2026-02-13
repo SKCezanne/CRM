@@ -1,0 +1,3 @@
+download mysql 8.0
+after the initial login, change your password to "admin" (ALTER USER '<username>'@'localhost' IDENTIFIED BY 'MyNewPass';)
+should work ig idk
