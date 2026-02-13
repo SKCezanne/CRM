@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM System - Customer Management</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>CRM System</h1>
+            <div class="header-actions">
+                <button class="btn btn-primary" onclick="showAddCustomerModal()">+ Add Customer</button>
+            </div>
+        </header>
+
+        <div class="filters">
+            <select id="filterStatus" onchange="filterCustomers()">
+                <option value="">All Statuses</option>
+                <option value="Planning">Planning</option>
+                <option value="Active">Active</option>
+                <option value="On Hold">On Hold</option>
+                <option value="Completed">Completed</option>
+                <option value="Cancelled">Cancelled</option>
+            </select>
+            <select id="filterPriority" onchange="filterCustomers()">
+                <option value="">All Priorities</option>
+                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="High">High</option>
+                <option value="Critical">Critical</option>
+            </select>
+            <input type="text" id="searchInput" placeholder="Search customers..." oninput="filterCustomers()">
+        </div>
+
+        <div class="table-container">
+            <table id="customersTable">
+                <thead>
+                    <tr>
+                        <th>Company</th>
+                        <th>Contact</th>
+                        <th>Service Category</th>
+                        <th>Status</th>
+                        <th>Priority</th>
+                        <th>Years Known</th>
+                        <th>Employees</th>
+                        <th>Last Contact</th>
+                    </tr>
+                </thead>
+                <tbody id="customersTableBody">
+                    <tr>
+                        <td colspan="8" class="loading">Loading customers...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Customer Detail Modal -->
+    <div id="customerDetailModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeCustomerDetail()">&times;</span>
+            <div id="customerDetailContent"></div>
+        </div>
+    </div>
+
+    <!-- Add Customer Modal -->
+    <div id="addCustomerModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeAddCustomerModal()">&times;</span>
+            <h2>Add New Customer</h2>
+            <form id="addCustomerForm" onsubmit="addCustomer(event)">
+                <div class="form-group">
+                    <label>Company Name *</label>
+                    <input type="text" name="company_name" required>
+                </div>
+                <div class="form-group">
+                    <label>Contact Name</label>
+                    <input type="text" name="contact_name">
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" name="email">
+                </div>
+                <div class="form-group">
+                    <label>Phone</label>
+                    <input type="tel" name="phone">
+                </div>
+                <div class="form-group">
+                    <label>Service Category</label>
+                    <select name="service_category_id" id="serviceCategorySelect">
+                        <option value="">Select Category</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Priority</label>
+                    <select name="priority">
+                        <option value="Medium">Medium</option>
+                        <option value="Low">Low</option>
+                        <option value="High">High</option>
+                        <option value="Critical">Critical</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <select name="status">
+                        <option value="Planning">Planning</option>
+                        <option value="Active">Active</option>
+                        <option value="On Hold">On Hold</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>First Contact Date</label>
+                    <input type="date" name="first_contact_date">
+                </div>
+                <div class="form-group">
+                    <label>Notes</label>
+                    <textarea name="notes" rows="3"></textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeAddCustomerModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Add Customer</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
