@@ -62,13 +62,48 @@ async function initDb() {
       website VARCHAR(255),
       service_category_id INT,
       priority ENUM('Low', 'Medium', 'High', 'Critical') DEFAULT 'Medium',
-      status ENUM('Planning', 'Active', 'On Hold', 'Completed', 'Cancelled') DEFAULT 'Planning',
+      status ENUM('Pending Plan', 'Planning', 'Active', 'On Hold', 'Completed', 'Cancelled') DEFAULT 'Pending Plan',
       first_contact_date DATE,
       last_contact_date DATE,
       notes TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       FOREIGN KEY (service_category_id) REFERENCES service_categories(id) ON DELETE SET NULL
+    )
+  `);
+
+  // Add 'Pending Plan' to existing customers table if it was created with old enum
+  try {
+    await conn.query(`
+      ALTER TABLE customers 
+      MODIFY COLUMN status ENUM('Pending Plan', 'Planning', 'Active', 'On Hold', 'Completed', 'Cancelled') DEFAULT 'Pending Plan'
+    `);
+  } catch (e) {
+    // ignore if already applied or table new
+  }
+
+  // Goal plans: one per customer; when finalized_at is set, customer appears in main table
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS customer_goal_plans (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      customer_id INT NOT NULL UNIQUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      finalized_at DATETIME NULL,
+      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+    )
+  `);
+
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS customer_goal_steps (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      goal_plan_id INT NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      description TEXT,
+      sort_order INT NOT NULL DEFAULT 0,
+      is_completed TINYINT(1) NOT NULL DEFAULT 0,
+      completed_at DATETIME NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (goal_plan_id) REFERENCES customer_goal_plans(id) ON DELETE CASCADE
     )
   `);
 

@@ -2,13 +2,24 @@ const API_BASE = '/api';
 
 let allCustomers = [];
 let filteredCustomers = [];
+let pendingCustomers = [];
 let charts = [];
+let currentTab = 'main';
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async () => {
     await loadServiceCategories();
     await loadCustomers();
+    await loadPendingCustomers();
 });
+
+function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+    document.getElementById('mainSection').style.display = tab === 'main' ? 'block' : 'none';
+    document.getElementById('pendingSection').style.display = tab === 'pending' ? 'block' : 'none';
+}
 
 // Load service categories for dropdown
 async function loadServiceCategories() {
@@ -27,7 +38,7 @@ async function loadServiceCategories() {
     }
 }
 
-// Load all customers
+// Load main-table customers (finalized plan only)
 async function loadCustomers() {
     try {
         const response = await fetch(`${API_BASE}/customers`);
@@ -37,8 +48,39 @@ async function loadCustomers() {
     } catch (error) {
         console.error('Error loading customers:', error);
         document.getElementById('customersTableBody').innerHTML = 
-            '<tr><td colspan="8" class="loading">Error loading customers. Please check your database connection.</td></tr>';
+            '<tr><td colspan="9" class="loading">Error loading customers. Please check your database connection.</td></tr>';
     }
+}
+
+async function loadPendingCustomers() {
+    try {
+        const response = await fetch(`${API_BASE}/pending-customers`);
+        pendingCustomers = await response.json();
+        renderPendingCustomers();
+    } catch (error) {
+        console.error('Error loading pending:', error);
+        document.getElementById('pendingTableBody').innerHTML = 
+            '<tr><td colspan="6" class="loading">Error loading pending customers.</td></tr>';
+    }
+}
+
+function renderPendingCustomers() {
+    const tbody = document.getElementById('pendingTableBody');
+    if (!tbody) return;
+    if (pendingCustomers.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="loading">No pending customers. New customers appear here until a goal plan is finalized.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = pendingCustomers.map(c => `
+        <tr>
+            <td><strong>${escapeHtml(c.company_name)}</strong></td>
+            <td>${escapeHtml(c.contact_name || 'N/A')}</td>
+            <td>${escapeHtml(c.service_category_name || 'Uncategorized')}</td>
+            <td><span class="priority-badge priority-${(c.priority || 'medium').toLowerCase()}">${c.priority}</span></td>
+            <td>${c.created_at ? new Date(c.created_at).toLocaleDateString() : ''}</td>
+            <td><button class="btn btn-primary" onclick="showCustomerDetail(${c.id}); event.stopPropagation();">Set up goal plan</button></td>
+        </tr>
+    `).join('');
 }
 
 // Render customers table
@@ -46,16 +88,17 @@ function renderCustomers() {
     const tbody = document.getElementById('customersTableBody');
     
     if (filteredCustomers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="loading">No customers found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="loading">No customers found</td></tr>';
         return;
     }
 
     tbody.innerHTML = filteredCustomers.map(customer => {
-        const statusClass = customer.status.toLowerCase().replace(' ', '');
-        const priorityClass = customer.priority.toLowerCase();
+        const statusClass = (customer.status || '').toLowerCase().replace(' ', '');
+        const priorityClass = (customer.priority || '').toLowerCase();
         const lastContact = customer.last_contact_date 
             ? new Date(customer.last_contact_date).toLocaleDateString()
             : 'Never';
+        const progress = customer.progress_pct != null ? customer.progress_pct : 0;
 
         return `
             <tr onclick="showCustomerDetail(${customer.id})" onmouseenter="expandRow(this)" onmouseleave="collapseRow(this)">
@@ -65,6 +108,10 @@ function renderCustomers() {
                 </td>
                 <td>${escapeHtml(customer.contact_name || 'N/A')}</td>
                 <td>${escapeHtml(customer.service_category_name || 'Uncategorized')}</td>
+                <td>
+                    <div class="progress-bar-wrap" title="${progress}%"><div class="progress-bar-fill" style="width:${progress}%"></div></div>
+                    <span class="progress-pct">${progress}%</span>
+                </td>
                 <td>
                     <span class="status-badge status-${statusClass}">
                         ${customer.status}
@@ -82,8 +129,9 @@ function renderCustomers() {
                           (customer.employee_names.split(', ').length > 2 ? '...' : '')
                         : 'None'}
                 </td>
-                <td>${lastContact}</td>
-                <td class="expanded-details">
+                <td>
+                    ${lastContact}
+                    <div class="expanded-details">
                     <div class="expanded-details-grid">
                         <div class="expanded-details-item">
                             <h4>Contact Information</h4>
@@ -112,6 +160,7 @@ function renderCustomers() {
                         </div>
                         ` : ''}
                     </div>
+                    </div>
                 </td>
             </tr>
         `;
@@ -126,6 +175,170 @@ function expandRow(row) {
 // Collapse row on mouse leave
 function collapseRow(row) {
     row.classList.remove('expanded');
+}
+
+function renderPendingGoalPlan(customerId, goalPlan, steps) {
+    if (!goalPlan) {
+        return `
+            <div class="customer-detail-section goal-plan-section">
+                <h3>Goal plan</h3>
+                <p>Create a goal plan with steps. Once finalized, this customer will appear in the main table and progress will track completed steps.</p>
+                <button type="button" class="btn btn-primary" onclick="createGoalPlan(${customerId})">Create goal plan</button>
+            </div>
+        `;
+    }
+    const stepsList = steps.length
+        ? `<ul class="goal-steps-list">${steps.map(s => `
+            <li class="goal-step-item ${s.is_completed ? 'completed' : ''}" data-step-id="${s.id}">
+                <input type="checkbox" ${s.is_completed ? 'checked' : ''} onchange="toggleStepComplete(${customerId}, ${s.id}, this.checked)" />
+                <div>
+                    <div class="step-title">${escapeHtml(s.title)}</div>
+                    ${s.description ? `<div class="step-desc">${escapeHtml(s.description)}</div>` : ''}
+                </div>
+                <button type="button" class="step-delete" onclick="event.stopPropagation(); deleteStep(${customerId}, ${s.id})">Delete</button>
+            </li>
+        `).join('')}</ul>`
+        : '<p>Add at least one step, then finalize.</p>';
+    return `
+        <div class="customer-detail-section goal-plan-section">
+            <h3>Goal plan (draft)</h3>
+            ${stepsList}
+            <div class="add-step-form">
+                <input type="text" id="newStepTitle" placeholder="Step title" />
+                <input type="text" id="newStepDesc" placeholder="Description (optional)" />
+                <button type="button" class="btn btn-primary" onclick="addStep(${customerId})">Add step</button>
+            </div>
+            <div style="margin-top: 12px;">
+                <button type="button" class="btn btn-primary" onclick="finalizePlan(${customerId})">Finalize plan (move to main table)</button>
+            </div>
+        </div>
+    `;
+}
+
+function renderMainGoalPlan(customerId, steps, progressPct) {
+    const stepsList = steps.length
+        ? `<ul class="goal-steps-list">${steps.map(s => `
+            <li class="goal-step-item ${s.is_completed ? 'completed' : ''}" data-step-id="${s.id}">
+                <input type="checkbox" ${s.is_completed ? 'checked' : ''} onchange="toggleStepComplete(${customerId}, ${s.id}, this.checked)" />
+                <div>
+                    <div class="step-title">${escapeHtml(s.title)}</div>
+                    ${s.description ? `<div class="step-desc">${escapeHtml(s.description)}</div>` : ''}
+                </div>
+                <button type="button" class="step-delete" onclick="event.stopPropagation(); deleteStep(${customerId}, ${s.id})">Delete</button>
+            </li>
+        `).join('')}</ul>`
+        : '<p>No steps.</p>';
+    return `
+        <div class="customer-detail-section goal-plan-section">
+            <h3>Goal plan & progress</h3>
+            <div class="progress-bar-wrap" style="max-width: 100%; margin-bottom: 12px;" title="${progressPct}%">
+                <div class="progress-bar-fill" style="width:${progressPct}%"></div>
+            </div>
+            <p><strong>${progressPct}%</strong> complete (steps completed / total)</p>
+            ${stepsList}
+            <div class="add-step-form">
+                <input type="text" id="newStepTitle" placeholder="Step title" />
+                <input type="text" id="newStepDesc" placeholder="Description (optional)" />
+                <button type="button" class="btn btn-primary" onclick="addStep(${customerId})">Add step</button>
+            </div>
+        </div>
+    `;
+}
+
+async function createGoalPlan(customerId) {
+    try {
+        const res = await fetch(`${API_BASE}/customers/${customerId}/goal-plan`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        await showCustomerDetail(customerId);
+        await loadPendingCustomers();
+    } catch (e) {
+        alert(e.message || 'Could not create goal plan');
+    }
+}
+
+async function addStep(customerId) {
+    const titleEl = document.getElementById('newStepTitle');
+    const descEl = document.getElementById('newStepDesc');
+    const title = titleEl && titleEl.value.trim();
+    if (!title) {
+        alert('Enter a step title');
+        return;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/customers/${customerId}/goal-plan/steps`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, description: (descEl && descEl.value.trim()) || null })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        if (titleEl) titleEl.value = '';
+        if (descEl) descEl.value = '';
+        await showCustomerDetail(customerId);
+        await loadPendingCustomers();
+        await loadCustomers();
+    } catch (e) {
+        alert(e.message || 'Could not add step');
+    }
+}
+
+async function toggleStepComplete(customerId, stepId, checked) {
+    try {
+        const res = await fetch(`${API_BASE}/customers/${customerId}/goal-plan/steps/${stepId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_completed: !!checked })
+        });
+        if (!res.ok) throw new Error('Failed to update step');
+        await showCustomerDetail(customerId);
+        await loadCustomers();
+    } catch (e) {
+        alert(e.message || 'Could not update step');
+    }
+}
+
+async function deleteStep(customerId, stepId) {
+    if (!confirm('Delete this step?')) return;
+    try {
+        const res = await fetch(`${API_BASE}/customers/${customerId}/goal-plan/steps/${stepId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Failed to delete step');
+        await showCustomerDetail(customerId);
+        await loadPendingCustomers();
+        await loadCustomers();
+    } catch (e) {
+        alert(e.message || 'Could not delete step');
+    }
+}
+
+async function finalizePlan(customerId) {
+    try {
+        const res = await fetch(`${API_BASE}/customers/${customerId}/goal-plan/finalize`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to finalize');
+        closeCustomerDetail();
+        await loadPendingCustomers();
+        await loadCustomers();
+        alert('Goal plan finalized. Customer is now in the main table.');
+    } catch (e) {
+        alert(e.message || 'Could not finalize plan');
+    }
+}
+
+async function updateCustomerStatus(customerId, status) {
+    try {
+        const res = await fetch(`${API_BASE}/customers/${customerId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status })
+        });
+        if (!res.ok) throw new Error('Failed to update status');
+        await showCustomerDetail(customerId);
+        await loadCustomers();
+        await loadPendingCustomers();
+    } catch (e) {
+        alert(e.message || 'Could not update status');
+    }
 }
 
 // Filter customers
@@ -149,7 +362,7 @@ function filterCustomers() {
     renderCustomers();
 }
 
-// Show customer detail modal
+// Show customer detail modal (works for both main and pending customers)
 async function showCustomerDetail(customerId) {
     try {
         const modal = document.getElementById('customerDetailModal');
@@ -158,29 +371,62 @@ async function showCustomerDetail(customerId) {
         content.innerHTML = '<div class="loading">Loading customer details...</div>';
         modal.style.display = 'block';
 
-        // Load customer details
-        const [customerResponse, statsResponse] = await Promise.all([
-            fetch(`${API_BASE}/customers/${customerId}`),
-            fetch(`${API_BASE}/customers/${customerId}/statistics`)
-        ]);
-
+        const customerResponse = await fetch(`${API_BASE}/customers/${customerId}`);
+        if (!customerResponse.ok) {
+            content.innerHTML = '<div class="loading">Customer not found.</div>';
+            return;
+        }
         const customer = await customerResponse.json();
-        const stats = await statsResponse.json();
+
+        let stats = { interactionTypes: [], monthlyTrend: [], employeeInvolvement: [] };
+        try {
+            const statsResponse = await fetch(`${API_BASE}/customers/${customerId}/statistics`);
+            if (statsResponse.ok) stats = await statsResponse.json();
+        } catch (_) {}
+
+        const isPending = !customer.goal_plan || !customer.goal_plan.finalized_at;
+        const goalPlan = customer.goal_plan;
+        const steps = customer.goal_steps || [];
+        const progressPct = customer.progress_pct != null ? customer.progress_pct : 0;
+
+        const goalPlanHtml = isPending
+            ? renderPendingGoalPlan(customerId, goalPlan, steps)
+            : renderMainGoalPlan(customerId, steps, progressPct);
+
+        const statusUpdateHtml = `
+            <div class="customer-detail-section status-update-row-wrap">
+                <h3>Update record</h3>
+                <div class="status-update-row">
+                    <label>Status:</label>
+                    <select id="detailStatusSelect" onchange="updateCustomerStatus(${customerId}, this.value)">
+                        <option value="Pending Plan" ${customer.status === 'Pending Plan' ? 'selected' : ''}>Pending Plan</option>
+                        <option value="Planning" ${customer.status === 'Planning' ? 'selected' : ''}>Planning</option>
+                        <option value="Active" ${customer.status === 'Active' ? 'selected' : ''}>Active</option>
+                        <option value="On Hold" ${customer.status === 'On Hold' ? 'selected' : ''}>On Hold</option>
+                        <option value="Completed" ${customer.status === 'Completed' ? 'selected' : ''}>Completed</option>
+                        <option value="Cancelled" ${customer.status === 'Cancelled' ? 'selected' : ''}>Cancelled</option>
+                    </select>
+                </div>
+            </div>
+        `;
 
         // Render customer detail page
         content.innerHTML = `
             <div class="customer-detail-header">
                 <h2>${escapeHtml(customer.company_name)}</h2>
                 <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <span class="status-badge status-${customer.status.toLowerCase().replace(' ', '')}">
+                    <span class="status-badge status-${(customer.status || '').toLowerCase().replace(' ', '')}">
                         ${customer.status}
                     </span>
-                    <span class="priority-badge priority-${customer.priority.toLowerCase()}">
+                    <span class="priority-badge priority-${(customer.priority || '').toLowerCase()}">
                         ${customer.priority}
                     </span>
                     ${customer.status === 'Planning' ? '<span class="status-icon planning"></span> <span>Planning in progress</span>' : ''}
                 </div>
             </div>
+
+            ${goalPlanHtml}
+            ${statusUpdateHtml}
 
             <div class="customer-detail-section">
                 <h3>Company Information</h3>

@@ -16,45 +16,74 @@
             </div>
         </header>
 
-        <div class="filters">
-            <select id="filterStatus" onchange="filterCustomers()">
-                <option value="">All Statuses</option>
-                <option value="Planning">Planning</option>
-                <option value="Active">Active</option>
-                <option value="On Hold">On Hold</option>
-                <option value="Completed">Completed</option>
-                <option value="Cancelled">Cancelled</option>
-            </select>
-            <select id="filterPriority" onchange="filterCustomers()">
-                <option value="">All Priorities</option>
-                <option value="Low">Low</option>
-                <option value="Medium">Medium</option>
-                <option value="High">High</option>
-                <option value="Critical">Critical</option>
-            </select>
-            <input type="text" id="searchInput" placeholder="Search customers..." oninput="filterCustomers()">
+        <div class="tabs">
+            <button type="button" class="tab active" data-tab="main" onclick="switchTab('main')">Main (Active Customers)</button>
+            <button type="button" class="tab" data-tab="pending" onclick="switchTab('pending')">Pending (Awaiting Goal Plan)</button>
         </div>
 
-        <div class="table-container">
-            <table id="customersTable">
-                <thead>
-                    <tr>
-                        <th>Company</th>
-                        <th>Contact</th>
-                        <th>Service Category</th>
-                        <th>Status</th>
-                        <th>Priority</th>
-                        <th>Years Known</th>
-                        <th>Employees</th>
-                        <th>Last Contact</th>
-                    </tr>
-                </thead>
-                <tbody id="customersTableBody">
-                    <tr>
-                        <td colspan="8" class="loading">Loading customers...</td>
-                    </tr>
-                </tbody>
-            </table>
+        <div id="mainSection" class="tab-panel">
+            <div class="filters">
+                <select id="filterStatus" onchange="filterCustomers()">
+                    <option value="">All Statuses</option>
+                    <option value="Planning">Planning</option>
+                    <option value="Active">Active</option>
+                    <option value="On Hold">On Hold</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Cancelled">Cancelled</option>
+                </select>
+                <select id="filterPriority" onchange="filterCustomers()">
+                    <option value="">All Priorities</option>
+                    <option value="Low">Low</option>
+                    <option value="Medium">Medium</option>
+                    <option value="High">High</option>
+                    <option value="Critical">Critical</option>
+                </select>
+                <input type="text" id="searchInput" placeholder="Search customers..." oninput="filterCustomers()">
+            </div>
+            <div class="table-container">
+                <table id="customersTable">
+                    <thead>
+                        <tr>
+                            <th>Company</th>
+                            <th>Contact</th>
+                            <th>Service Category</th>
+                            <th>Progress</th>
+                            <th>Status</th>
+                            <th>Priority</th>
+                            <th>Years Known</th>
+                            <th>Employees</th>
+                            <th>Last Contact</th>
+                        </tr>
+                    </thead>
+                    <tbody id="customersTableBody">
+                        <tr>
+                            <td colspan="9" class="loading">Loading customers...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="pendingSection" class="tab-panel" style="display: none;">
+            <div class="table-container">
+                <table id="pendingTable">
+                    <thead>
+                        <tr>
+                            <th>Company</th>
+                            <th>Contact</th>
+                            <th>Service Category</th>
+                            <th>Priority</th>
+                            <th>Created</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pendingTableBody">
+                        <tr>
+                            <td colspan="6" class="loading">Loading pending...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -101,14 +130,6 @@
                         <option value="Low">Low</option>
                         <option value="High">High</option>
                         <option value="Critical">Critical</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Status</label>
-                    <select name="status">
-                        <option value="Planning">Planning</option>
-                        <option value="Active">Active</option>
-                        <option value="On Hold">On Hold</option>
                     </select>
                 </div>
                 <div class="form-group">

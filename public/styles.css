@@ -70,6 +70,38 @@ header h1 {
     background: #5a6268;
 }
 
+.tabs {
+    display: flex;
+    gap: 0;
+    background: #e9ecef;
+    padding: 0;
+}
+
+.tab {
+    padding: 14px 24px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 500;
+    color: #495057;
+    border-bottom: 3px solid transparent;
+}
+
+.tab:hover {
+    background: #dee2e6;
+}
+
+.tab.active {
+    background: white;
+    color: #667eea;
+    border-bottom-color: #667eea;
+}
+
+.tab-panel {
+    padding: 0;
+}
+
 .filters {
     padding: 20px 30px;
     background: #f8f9fa;
@@ -208,6 +240,120 @@ td {
 .priority-critical {
     background: #ffcccc;
     color: #c0392b;
+}
+
+.progress-bar-wrap {
+    min-width: 80px;
+    max-width: 120px;
+    height: 8px;
+    background: #e9ecef;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #667eea, #764ba2);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.progress-bar-wrap + .progress-pct {
+    font-size: 12px;
+    color: #495057;
+    margin-left: 6px;
+}
+
+.goal-plan-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.goal-plan-section h3 {
+    margin-bottom: 15px;
+}
+
+.goal-steps-list {
+    list-style: none;
+}
+
+.goal-step-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: white;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    border: 1px solid #dee2e6;
+}
+
+.goal-step-item.completed {
+    opacity: 0.85;
+    border-color: #d4edda;
+    background: #f8fff9;
+}
+
+.goal-step-item input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+}
+
+.goal-step-item .step-title {
+    flex: 1;
+    font-weight: 500;
+}
+
+.goal-step-item .step-desc {
+    font-size: 13px;
+    color: #6c757d;
+    margin-top: 4px;
+}
+
+.goal-step-item .step-delete {
+    background: #dc3545;
+    color: white;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.add-step-form {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+}
+
+.add-step-form input {
+    flex: 1;
+    min-width: 180px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+}
+
+.status-update-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 15px;
+    flex-wrap: wrap;
+}
+
+.status-update-row label {
+    font-weight: 500;
+}
+
+.status-update-row select {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #ddd;
 }
 
 .status-icon {

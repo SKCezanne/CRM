@@ -22,7 +22,7 @@ function calculateYearsKnown(firstContactDate) {
   return Math.floor(diffYears);
 }
 
-// Get all customers with related data
+// Get main-table customers only (have finalized goal plan), with progress
 app.get('/api/customers', async (req, res) => {
   try {
     const conn = await getPool();
@@ -31,25 +31,66 @@ app.get('/api/customers', async (req, res) => {
         c.*,
         sc.name as service_category_name,
         COUNT(DISTINCT ce.employee_id) as employee_count,
-        GROUP_CONCAT(DISTINCT CONCAT(e.first_name, ' ', e.last_name) SEPARATOR ', ') as employee_names
+        GROUP_CONCAT(DISTINCT CONCAT(e.first_name, ' ', e.last_name) SEPARATOR ', ') as employee_names,
+        gp.id as goal_plan_id,
+        (SELECT COUNT(*) FROM customer_goal_steps WHERE goal_plan_id = gp.id) as total_steps,
+        (SELECT COUNT(*) FROM customer_goal_steps WHERE goal_plan_id = gp.id AND is_completed = 1) as completed_steps
       FROM customers c
+      INNER JOIN customer_goal_plans gp ON gp.customer_id = c.id AND gp.finalized_at IS NOT NULL
       LEFT JOIN service_categories sc ON c.service_category_id = sc.id
       LEFT JOIN customer_employees ce ON c.id = ce.customer_id
       LEFT JOIN employees e ON ce.employee_id = e.id
-      GROUP BY c.id
+      GROUP BY c.id, gp.id
       ORDER BY c.created_at DESC
     `);
 
-    // Calculate years known for each customer
-    const customersWithYears = customers.map(customer => ({
-      ...customer,
-      years_known: calculateYearsKnown(customer.first_contact_date)
-    }));
+    const customersWithYears = customers.map(customer => {
+      const total = Number(customer.total_steps) || 0;
+      const completed = Number(customer.completed_steps) || 0;
+      const progress_pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  
+      return {
+        ...customer,
+        years_known: calculateYearsKnown(customer.first_contact_date),
+        progress_pct,
+        total_steps: total,
+        completed_steps: completed
+      };
+    });
 
     res.json(customersWithYears);
   } catch (error) {
     console.error('Error fetching customers:', error);
     res.status(500).json({ error: 'Failed to fetch customers' });
+  }
+});
+
+// Get pending customers (no finalized goal plan yet)
+app.get('/api/pending-customers', async (req, res) => {
+  try {
+    const conn = await getPool();
+    const [customers] = await conn.query(`
+      SELECT 
+        c.*,
+        sc.name as service_category_name,
+        gp.id as goal_plan_id,
+        gp.finalized_at as plan_finalized_at
+      FROM customers c
+      LEFT JOIN service_categories sc ON c.service_category_id = sc.id
+      LEFT JOIN customer_goal_plans gp ON gp.customer_id = c.id
+      WHERE gp.id IS NULL OR gp.finalized_at IS NULL
+      ORDER BY c.created_at DESC
+    `);
+
+    const withYears = customers.map(c => ({
+      ...c,
+      years_known: calculateYearsKnown(c.first_contact_date)
+    }));
+
+    res.json(withYears);
+  } catch (error) {
+    console.error('Error fetching pending customers:', error);
+    res.status(500).json({ error: 'Failed to fetch pending customers' });
   }
 });
 
@@ -75,6 +116,24 @@ app.get('/api/customers/:id', async (req, res) => {
     }
 
     const customer = customers[0];
+
+    // Get goal plan and steps
+    const [plans] = await conn.query(
+      'SELECT * FROM customer_goal_plans WHERE customer_id = ? ORDER BY id DESC LIMIT 1',
+      [customerId]
+    );
+    let goalPlan = plans[0] || null;
+    let steps = [];
+    if (goalPlan) {
+      const [stepsRows] = await conn.query(
+        'SELECT * FROM customer_goal_steps WHERE goal_plan_id = ? ORDER BY sort_order, id',
+        [goalPlan.id]
+      );
+      steps = stepsRows;
+    }
+    const totalSteps = steps.length;
+    const completedSteps = steps.filter(s => s.is_completed).length;
+    const progress_pct = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
 
     // Get assigned employees
     const [employees] = await conn.query(`
@@ -105,7 +164,12 @@ app.get('/api/customers/:id', async (req, res) => {
     res.json({
       ...customer,
       employees,
-      interactions
+      interactions,
+      goal_plan: goalPlan,
+      goal_steps: steps,
+      progress_pct,
+      total_steps: totalSteps,
+      completed_steps: completedSteps
     });
   } catch (error) {
     console.error('Error fetching customer:', error);
@@ -219,7 +283,7 @@ app.post('/api/customers', async (req, res) => {
     `, [
       company_name, contact_name, email, phone, address, city, state,
       zip_code, country, website, service_category_id || null, priority || 'Medium',
-      status || 'Planning', first_contact_date || null, notes || null
+      'Pending Plan', first_contact_date || null, notes || null
     ]);
 
     res.status(201).json({ id: result.insertId, message: 'Customer created successfully' });
@@ -301,6 +365,211 @@ app.post('/api/customers/:id/interactions', async (req, res) => {
   } catch (error) {
     console.error('Error adding interaction:', error);
     res.status(500).json({ error: 'Failed to add interaction' });
+  }
+});
+
+// --- Goal plan ---
+app.get('/api/customers/:id/goal-plan', async (req, res) => {
+  try {
+    const conn = await getPool();
+    const [plans] = await conn.query(
+      'SELECT * FROM customer_goal_plans WHERE customer_id = ? ORDER BY id DESC LIMIT 1',
+      [req.params.id]
+    );
+    const plan = plans[0] || null;
+    if (!plan) {
+      return res.json({ goal_plan: null, steps: [] });
+    }
+    const [steps] = await conn.query(
+      'SELECT * FROM customer_goal_steps WHERE goal_plan_id = ? ORDER BY sort_order, id',
+      [plan.id]
+    );
+    res.json({ goal_plan: plan, steps });
+  } catch (error) {
+    console.error('Error fetching goal plan:', error);
+    res.status(500).json({ error: 'Failed to fetch goal plan' });
+  }
+});
+
+app.post('/api/customers/:id/goal-plan', async (req, res) => {
+  try {
+    const conn = await getPool();
+    const customerId = req.params.id;
+    const [existing] = await conn.query(
+      'SELECT id FROM customer_goal_plans WHERE customer_id = ?',
+      [customerId]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'Goal plan already exists for this customer' });
+    }
+    const [result] = await conn.query(
+      'INSERT INTO customer_goal_plans (customer_id) VALUES (?)',
+      [customerId]
+    );
+    res.status(201).json({ id: result.insertId, message: 'Goal plan created' });
+  } catch (error) {
+    console.error('Error creating goal plan:', error);
+    res.status(500).json({ error: 'Failed to create goal plan' });
+  }
+});
+
+app.post('/api/customers/:id/goal-plan/steps', async (req, res) => {
+  try {
+    const conn = await getPool();
+    const customerId = req.params.id;
+    const { title, description } = req.body;
+    const [plans] = await conn.query(
+      'SELECT id FROM customer_goal_plans WHERE customer_id = ?',
+      [customerId]
+    );
+    if (!plans.length) {
+      return res.status(400).json({ error: 'Create a goal plan first' });
+    }
+    const goalPlanId = plans[0].id;
+    const [maxOrder] = await conn.query(
+      'SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order FROM customer_goal_steps WHERE goal_plan_id = ?',
+      [goalPlanId]
+    );
+    const sortOrder = maxOrder[0].next_order;
+    const [result] = await conn.query(
+      'INSERT INTO customer_goal_steps (goal_plan_id, title, description, sort_order) VALUES (?, ?, ?, ?)',
+      [goalPlanId, title || 'New step', description || null, sortOrder]
+    );
+    res.status(201).json({ id: result.insertId, message: 'Step added' });
+  } catch (error) {
+    console.error('Error adding step:', error);
+    res.status(500).json({ error: 'Failed to add step' });
+  }
+});
+app.put('/api/customers/:id/goal-plan/steps/:stepId', async (req, res) => {
+  try {
+    const conn = await getPool();
+    const customerId = req.params.id;
+    const stepId = req.params.stepId;
+    const { title, description, is_completed } = req.body;
+
+    const updates = [];
+    const values = [];
+
+    if (title !== undefined) {
+      updates.push('title = ?');
+      values.push(title);
+    }
+
+    if (description !== undefined) {
+      updates.push('description = ?');
+      values.push(description);
+    }
+
+    if (is_completed !== undefined) {
+      updates.push('is_completed = ?');
+      values.push(is_completed ? 1 : 0);
+
+      updates.push('completed_at = ?');
+      values.push(is_completed ? new Date() : null);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+
+    values.push(stepId);
+
+    await conn.query(
+      `UPDATE customer_goal_steps SET ${updates.join(', ')} WHERE id = ?`,
+      values
+    );
+
+    // 🔥 ALWAYS GET LATEST PLAN
+    const [plans] = await conn.query(
+      'SELECT id FROM customer_goal_plans WHERE customer_id = ? ORDER BY id DESC LIMIT 1',
+      [customerId]
+    );
+
+    if (plans.length) {
+      const goalPlanId = plans[0].id;
+
+      const [counts] = await conn.query(
+        `
+        SELECT 
+          COUNT(*) as total,
+          COUNT(CASE WHEN is_completed = 1 THEN 1 END) as completed
+        FROM customer_goal_steps
+        WHERE goal_plan_id = ?
+        `,
+        [goalPlanId]
+      );
+
+      const total = Number(counts[0].total) || 0;
+      const completed = Number(counts[0].completed) || 0;
+
+      console.log("Total:", total);
+      console.log("Completed:", completed);
+
+      if (total > 0 && completed >= total) {
+        await conn.query(
+          "UPDATE customers SET status = 'Completed' WHERE id = ?",
+          [customerId]
+        );
+        console.log("Customer marked as Completed");
+      } else {
+        await conn.query(
+          "UPDATE customers SET status = 'Active' WHERE id = ?",
+          [customerId]
+        );
+      }
+    }
+
+    res.json({ message: 'Step updated' });
+
+  } catch (error) {
+    console.error('Error updating step:', error);
+    res.status(500).json({ error: 'Failed to update step' });
+  }
+});
+
+
+app.delete('/api/customers/:id/goal-plan/steps/:stepId', async (req, res) => {
+  try {
+    const conn = await getPool();
+    await conn.query('DELETE FROM customer_goal_steps WHERE id = ?', [req.params.stepId]);
+    res.json({ message: 'Step deleted' });
+  } catch (error) {
+    console.error('Error deleting step:', error);
+    res.status(500).json({ error: 'Failed to delete step' });
+  }
+});
+
+app.post('/api/customers/:id/goal-plan/finalize', async (req, res) => {
+  try {
+    const conn = await getPool();
+    const customerId = req.params.id;
+    const [plans] = await conn.query(
+      'SELECT id FROM customer_goal_plans WHERE customer_id = ?',
+      [customerId]
+    );
+    if (!plans.length) {
+      return res.status(400).json({ error: 'No goal plan found' });
+    }
+    const [steps] = await conn.query(
+      'SELECT id FROM customer_goal_steps WHERE goal_plan_id = ?',
+      [plans[0].id]
+    );
+    if (steps.length === 0) {
+      return res.status(400).json({ error: 'Add at least one step before finalizing' });
+    }
+    await conn.query(
+      'UPDATE customer_goal_plans SET finalized_at = NOW() WHERE id = ?',
+      [plans[0].id]
+    );
+    await conn.query(
+      "UPDATE customers SET status = 'Active' WHERE id = ?",
+      [customerId]
+    );
+    res.json({ message: 'Plan finalized; customer is now in main table' });
+  } catch (error) {
+    console.error('Error finalizing plan:', error);
+    res.status(500).json({ error: 'Failed to finalize plan' });
   }
 });
 
