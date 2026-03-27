@@ -16,75 +16,157 @@
             </div>
         </header>
 
-        <div class="tabs">
-            <button type="button" class="tab active" data-tab="main" onclick="switchTab('main')">Main (Active Customers)</button>
-            <button type="button" class="tab" data-tab="pending" onclick="switchTab('pending')">Pending (Awaiting Goal Plan)</button>
-        </div>
+        <div class="layout">
+            <aside class="sidebar">
+                <div class="sidebar-card">
+                    <h3>Overview</h3>
+                    <div class="sidebar-metric">
+                        <div class="label">Total Customers</div>
+                        <div class="value" id="metricTotalCustomers">—</div>
+                    </div>
+                    <div class="sidebar-stats-grid">
+                        <div class="stat-pill">
+                            <span class="dot dot-active"></span>
+                            <span class="name">Active</span>
+                            <span class="count" id="statActive">—</span>
+                        </div>
+                        <div class="stat-pill">
+                            <span class="dot dot-pending"></span>
+                            <span class="name">Pending</span>
+                            <span class="count" id="statPending">—</span>
+                        </div>
+                    <div class="stat-pill">
+                        <span class="dot dot-completed"></span>
+                        <span class="name">Completed</span>
+                        <span class="count" id="statCompleted">—</span>
+                    </div>
+                        <div class="stat-pill">
+                            <span class="dot dot-onhold"></span>
+                            <span class="name">On Hold</span>
+                            <span class="count" id="statOnHold">—</span>
+                        </div>
+                        <div class="stat-pill">
+                            <span class="dot dot-cancelled"></span>
+                            <span class="name">Cancelled</span>
+                            <span class="count" id="statCancelled">—</span>
+                        </div>
+                    </div>
+                </div>
 
-        <div id="mainSection" class="tab-panel">
-            <div class="filters">
-                <select id="filterStatus" onchange="filterCustomers()">
-                    <option value="">All Statuses</option>
-                    <option value="Planning">Planning</option>
-                    <option value="Active">Active</option>
-                    <option value="On Hold">On Hold</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Cancelled">Cancelled</option>
-                </select>
-                <select id="filterPriority" onchange="filterCustomers()">
-                    <option value="">All Priorities</option>
-                    <option value="Low">Low</option>
-                    <option value="Medium">Medium</option>
-                    <option value="High">High</option>
-                    <option value="Critical">Critical</option>
-                </select>
-                <input type="text" id="searchInput" placeholder="Search customers..." oninput="filterCustomers()">
-            </div>
-            <div class="table-container">
-                <table id="customersTable">
-                    <thead>
-                        <tr>
-                            <th>Company</th>
-                            <th>Contact</th>
-                            <th>Service Category</th>
-                            <th>Progress</th>
-                            <th>Status</th>
-                            <th>Priority</th>
-                            <th>Years Known</th>
-                            <th>Employees</th>
-                            <th>Last Contact</th>
-                        </tr>
-                    </thead>
-                    <tbody id="customersTableBody">
-                        <tr>
-                            <td colspan="9" class="loading">Loading customers...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
+                <div class="sidebar-card">
+                    <h3>Quick actions</h3>
+                    <div class="sidebar-actions">
+                        <button type="button" class="btn btn-primary" onclick="showAddCustomerModal()">+ Add customer</button>
+                        <button type="button" class="btn btn-secondary" onclick="switchTab('pending')">Review pending</button>
+                        <button type="button" class="btn btn-secondary" onclick="switchTab('onhold')">View on hold</button>
+                    </div>
+                    <div class="sidebar-hint">
+                        Tip: right‑click a row to quickly move it between Pending / On Hold / Cancelled.
+                    </div>
+                </div>
+            </aside>
 
-        <div id="pendingSection" class="tab-panel" style="display: none;">
-            <div class="table-container">
-                <table id="pendingTable">
-                    <thead>
-                        <tr>
-                            <th>Company</th>
-                            <th>Contact</th>
-                            <th>Service Category</th>
-                            <th>Priority</th>
-                            <th>Created</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody id="pendingTableBody">
-                        <tr>
-                            <td colspan="6" class="loading">Loading pending...</td>
-                        </tr>
-                    </tbody>
-                </table>
+            <main class="main">
+                <div class="tabs">
+                    <button type="button" class="tab active" data-tab="active" onclick="switchTab('active')">Active</button>
+                    <button type="button" class="tab" data-tab="pending" onclick="switchTab('pending')">Pending</button>
+                    <button type="button" class="tab" data-tab="completed" onclick="switchTab('completed')">Completed</button>
+                    <button type="button" class="tab" data-tab="onhold" onclick="switchTab('onhold')">On Hold</button>
+                    <button type="button" class="tab" data-tab="cancelled" onclick="switchTab('cancelled')">Cancelled</button>
+                </div>
+
+                <div id="mainSection" class="tab-panel">
+                    <div class="filters">
+                        <select id="filterStatus" onchange="filterCustomers()">
+                            <option value="">All Statuses</option>
+                            <option value="Pending Plan">Pending Plan</option>
+                            <option value="Planning">Planning</option>
+                            <option value="Active">Active</option>
+                            <option value="On Hold">On Hold</option>
+                            <option value="Completed">Completed</option>
+                            <option value="Cancelled">Cancelled</option>
+                        </select>
+                        <select id="filterPriority" onchange="filterCustomers()">
+                            <option value="">All Priorities</option>
+                            <option value="Low">Low</option>
+                            <option value="Medium">Medium</option>
+                            <option value="High">High</option>
+                            <option value="Critical">Critical</option>
+                        </select>
+                        <input type="text" id="searchInput" placeholder="Search customers..." oninput="filterCustomers()">
+                    </div>
+                    <div class="table-container">
+                        <table id="customersTable">
+                            <thead>
+                                <tr>
+                                    <th>Company</th>
+                                    <th>Contact</th>
+                                    <th>Service Category</th>
+                                    <th>Progress</th>
+                                    <th>Status</th>
+                                    <th>Priority</th>
+                                    <th>Years Known</th>
+                                    <th>Employees</th>
+                                    <th>Last Contact</th>
+                                </tr>
+                            </thead>
+                            <tbody id="customersTableBody">
+                                <tr>
+                                    <td colspan="9" class="loading">Loading customers...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div id="pendingSection" class="tab-panel" style="display: none;">
+                    <div class="table-container">
+                        <table id="pendingTable">
+                            <thead>
+                                <tr>
+                                    <th>Company</th>
+                                    <th>Contact</th>
+                                    <th>Service Category</th>
+                                    <th>Priority</th>
+                                    <th>Created</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="pendingTableBody">
+                                <tr>
+                                    <td colspan="6" class="loading">Loading pending...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Activity rail: fixed to screen-left, expands on hover -->
+    <div class="activity-drawer" aria-label="Activity">
+        <div class="activity-drawer-handle">
+            <div class="activity-drawer-title">Activity</div>
+        </div>
+        <div class="activity-drawer-panel">
+            <div class="activity-drawer-header">
+                <h3>Activity</h3>
+                <div id="activityUserLine" class="muted">—</div>
+            </div>
+            <div id="recentActivity" class="recent-activity">
+                <div class="muted">Loading…</div>
             </div>
         </div>
+    </div>
+
+    <!-- Right-click Context Menu -->
+    <div id="rowContextMenu" class="context-menu" style="display:none;">
+        <button type="button" class="context-menu-item" data-action="cancelled">Put on Cancelled</button>
+        <button type="button" class="context-menu-item" data-action="pending">Put on Pending</button>
+        <button type="button" class="context-menu-item" data-action="onhold">Put on On hold</button>
+        <div class="context-menu-sep"></div>
+        <button type="button" class="context-menu-item danger" data-action="delete" style="display:none;">Delete record</button>
     </div>
 
     <!-- Customer Detail Modal -->

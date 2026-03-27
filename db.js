@@ -127,6 +127,7 @@ async function initDb() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       customer_id INT NOT NULL,
       employee_id INT,
+      actor_username VARCHAR(100) NULL,
       interaction_type ENUM('Call', 'Email', 'Meeting', 'Note', 'Proposal', 'Contract') NOT NULL,
       subject VARCHAR(255),
       description TEXT,
@@ -135,6 +136,13 @@ async function initDb() {
       FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE SET NULL
     )
   `);
+
+  // Add actor_username column if table already existed
+  try {
+    await conn.query(`ALTER TABLE customer_interactions ADD COLUMN actor_username VARCHAR(100) NULL`);
+  } catch (e) {
+    // ignore if already exists
+  }
 
   // Insert sample service categories
   await conn.query(`

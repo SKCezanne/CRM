@@ -4,21 +4,58 @@ let allCustomers = [];
 let filteredCustomers = [];
 let pendingCustomers = [];
 let charts = [];
-let currentTab = 'main';
+let currentTab = 'active';
+let contextCustomerId = null;
+let contextRowEl = null;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async () => {
+    const authed = await ensureLoggedIn();
+    if (!authed) return;
     await loadServiceCategories();
-    await loadCustomers();
-    await loadPendingCustomers();
+    wireContextMenu();
+    await refreshSidebar();
+    await switchTab('active');
 });
 
-function switchTab(tab) {
+async function ensureLoggedIn() {
+    try {
+        const res = await fetch(`${API_BASE}/auth/me`);
+        const data = await res.json();
+        if (!data.user) {
+            window.location.href = '/login.html';
+            return false;
+        }
+        const userLine = document.getElementById('activityUserLine');
+        if (userLine) userLine.textContent = `Signed in as ${data.user.username}`;
+        return true;
+    } catch (_) {
+        window.location.href = '/login.html';
+        return false;
+    }
+}
+
+async function switchTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
-    document.getElementById('mainSection').style.display = tab === 'main' ? 'block' : 'none';
+    document.getElementById('mainSection').style.display = tab === 'pending' ? 'none' : 'block';
     document.getElementById('pendingSection').style.display = tab === 'pending' ? 'block' : 'none';
+
+    // Reset filters on tab switch (keeps UX predictable)
+    const statusEl = document.getElementById('filterStatus');
+    const priorityEl = document.getElementById('filterPriority');
+    const searchEl = document.getElementById('searchInput');
+    if (statusEl) statusEl.value = '';
+    if (priorityEl) priorityEl.value = '';
+    if (searchEl) searchEl.value = '';
+
+    if (tab === 'pending') {
+        await loadPendingCustomers();
+    } else {
+        await loadCustomersForTab(tab);
+    }
+    await refreshSidebar();
 }
 
 // Load service categories for dropdown
@@ -38,13 +75,13 @@ async function loadServiceCategories() {
     }
 }
 
-// Load main-table customers (finalized plan only)
-async function loadCustomers() {
+async function loadCustomersForTab(tab) {
     try {
-        const response = await fetch(`${API_BASE}/customers`);
+        const response = await fetch(`${API_BASE}/customers/tab/${tab}`);
         allCustomers = await response.json();
         filteredCustomers = [...allCustomers];
         renderCustomers();
+        await refreshSidebar();
     } catch (error) {
         console.error('Error loading customers:', error);
         document.getElementById('customersTableBody').innerHTML = 
@@ -52,11 +89,21 @@ async function loadCustomers() {
     }
 }
 
+// Backwards-compatible helper (older code paths call this)
+async function loadCustomers() {
+    if (currentTab === 'pending') {
+        await loadPendingCustomers();
+        return;
+    }
+    await loadCustomersForTab(currentTab || 'active');
+}
+
 async function loadPendingCustomers() {
     try {
-        const response = await fetch(`${API_BASE}/pending-customers`);
+        const response = await fetch(`${API_BASE}/customers/tab/pending`);
         pendingCustomers = await response.json();
         renderPendingCustomers();
+        await refreshSidebar();
     } catch (error) {
         console.error('Error loading pending:', error);
         document.getElementById('pendingTableBody').innerHTML = 
@@ -64,15 +111,164 @@ async function loadPendingCustomers() {
     }
 }
 
+async function refreshSidebar() {
+    await Promise.allSettled([loadOverviewStats(), loadRecentActivity()]);
+}
+
+function normalizeStatusCounts(byStatus) {
+    const counts = { active: 0, pending: 0, completed: 0, onhold: 0, cancelled: 0 };
+    (byStatus || []).forEach((row) => {
+        const status = String(row.status || '').toLowerCase();
+        const count = Number(row.count) || 0;
+        if (status === 'active' || status === 'planning') counts.active += count;
+        else if (status === 'completed') counts.completed += count;
+        else if (status === 'pending plan') counts.pending += count;
+        else if (status === 'on hold') counts.onhold += count;
+        else if (status === 'cancelled') counts.cancelled += count;
+    });
+    return counts;
+}
+
+async function loadOverviewStats() {
+    const totalEl = document.getElementById('metricTotalCustomers');
+    const activeEl = document.getElementById('statActive');
+    const pendingEl = document.getElementById('statPending');
+    const completedEl = document.getElementById('statCompleted');
+    const onHoldEl = document.getElementById('statOnHold');
+    const cancelledEl = document.getElementById('statCancelled');
+    if (!totalEl) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/dashboard/overview`);
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+
+        totalEl.textContent = String(data.totalCustomers ?? '—');
+        if (activeEl) activeEl.textContent = String(data.active ?? 0);
+        if (pendingEl) pendingEl.textContent = String(data.pending ?? 0);
+        if (completedEl) completedEl.textContent = String(data.completed ?? 0);
+        if (onHoldEl) onHoldEl.textContent = String(data.onhold ?? 0);
+        if (cancelledEl) cancelledEl.textContent = String(data.cancelled ?? 0);
+    } catch (_) {
+        totalEl.textContent = '—';
+    }
+}
+
+function formatSystemActivity(r) {
+    const desc = String(r.description || '');
+    if (desc === 'SYSTEM|CUSTOMER_CREATED') return { title: 'Customer created', detail: '' };
+    if (desc === 'SYSTEM|GOAL_PLAN_CREATED') return { title: 'Goal plan created', detail: '' };
+    if (desc === 'SYSTEM|GOAL_PLAN_FINALIZED') return { title: 'Goal plan finalized', detail: '' };
+    if (desc.startsWith('SYSTEM|STEP_ADDED|title=')) {
+        return { title: 'Goal step added', detail: desc.replace('SYSTEM|STEP_ADDED|title=', '') };
+    }
+    if (desc.startsWith('SYSTEM|STEP_DELETED|title=')) {
+        return { title: 'Goal step deleted', detail: desc.replace('SYSTEM|STEP_DELETED|title=', '') };
+    }
+    if (desc.startsWith('SYSTEM|STEP_TOGGLED|')) {
+        const titleMatch = desc.match(/title=([^|]*)/);
+        const compMatch = desc.match(/completed=([01])/);
+        const title = titleMatch ? titleMatch[1] : 'Step';
+        const completed = compMatch ? compMatch[1] === '1' : false;
+        return { title: completed ? 'Goal step completed' : 'Goal step uncompleted', detail: title };
+    }
+    if (desc.startsWith('SYSTEM|STATUS_CHANGE|')) {
+        const fromMatch = desc.match(/\|from=([^|]*)\|to=/);
+        const toMatch = desc.match(/\|to=([^|]*)$/);
+        const from = fromMatch ? fromMatch[1] : '';
+        const to = toMatch ? toMatch[1] : '';
+        return { title: 'Status changed', detail: `${from} → ${to}`.trim() };
+    }
+    return { title: r.subject || r.interaction_type || 'Activity', detail: r.description || '' };
+}
+
+function timeAgo(dateStr) {
+    const d = new Date(dateStr);
+    const diff = Date.now() - d.getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+}
+
+async function loadRecentActivity() {
+    const wrap = document.getElementById('recentActivity');
+    if (!wrap) return;
+    try {
+        const res = await fetch(`${API_BASE}/interactions/recent?limit=10`);
+        if (!res.ok) throw new Error('Failed');
+        const rows = await res.json();
+        if (!rows.length) {
+            wrap.innerHTML = '<div class="muted">No activity yet. Creating customers and changing statuses will show up here.</div>';
+            return;
+        }
+        wrap.innerHTML = rows.map((r) => `
+            <div class="activity-item" onclick="showCustomerDetail(${r.customer_id});">
+                <div class="top">
+                    <div class="company">${escapeHtml(r.company_name || 'Customer')}</div>
+                    <div class="time">${r.interaction_date ? new Date(r.interaction_date).toLocaleString() : ''}</div>
+                </div>
+                <div class="meta">${escapeHtml(formatSystemActivity(r).title)}</div>
+                <div class="muted" style="margin-top: 4px;">
+                    ${escapeHtml((r.actor_username || r.employee_name || 'unknown'))} • ${r.interaction_date ? timeAgo(r.interaction_date) : ''}
+                </div>
+                <div class="subject">${escapeHtml((formatSystemActivity(r).detail || '—')).slice(0, 90)}${(formatSystemActivity(r).detail || '').length > 90 ? '…' : ''}</div>
+                ${(Number(r.can_undo) === 1 || String(r.description || '').startsWith('SYSTEM|STATUS_CHANGE|')) ? `
+                    <div style="margin-top: 10px;">
+                        <button type="button" class="btn btn-secondary" onclick="event.stopPropagation(); undoActivity(${r.id});">Undo</button>
+                    </div>
+                ` : ''}
+            </div>
+        `).join('');
+    } catch (_) {
+        wrap.innerHTML = '<div class="muted">Could not load activity.</div>';
+    }
+}
+
+async function undoActivity(interactionId) {
+    try {
+        const res = await fetch(`${API_BASE}/interactions/${interactionId}/undo`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        await refreshSidebar();
+
+        // Refresh current tab lists so the record moves if needed
+        if (currentTab === 'pending') {
+            await loadPendingCustomers();
+        } else {
+            await loadCustomersForTab(currentTab);
+        }
+    } catch (e) {
+        alert(e.message || 'Could not undo activity');
+    }
+}
+
+async function deleteCustomer(customerId) {
+    if (!confirm('Delete this record permanently? This cannot be undone.')) return;
+    try {
+        const res = await fetch(`${API_BASE}/customers/${customerId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to delete');
+        await refreshSidebar();
+        if (currentTab === 'pending') await loadPendingCustomers();
+        else await loadCustomersForTab(currentTab);
+    } catch (e) {
+        alert(e.message || 'Could not delete record');
+    }
+}
+
 function renderPendingCustomers() {
     const tbody = document.getElementById('pendingTableBody');
     if (!tbody) return;
     if (pendingCustomers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="loading">No pending customers. New customers appear here until a goal plan is finalized.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="loading">No pending customers.</td></tr>';
         return;
     }
     tbody.innerHTML = pendingCustomers.map(c => `
-        <tr>
+        <tr oncontextmenu="openRowContextMenu(event, ${c.id}, '${escapeHtml(c.status || '')}')">
             <td><strong>${escapeHtml(c.company_name)}</strong></td>
             <td>${escapeHtml(c.contact_name || 'N/A')}</td>
             <td>${escapeHtml(c.service_category_name || 'Uncategorized')}</td>
@@ -101,7 +297,7 @@ function renderCustomers() {
         const progress = customer.progress_pct != null ? customer.progress_pct : 0;
 
         return `
-            <tr onclick="showCustomerDetail(${customer.id})" onmouseenter="expandRow(this)" onmouseleave="collapseRow(this)">
+            <tr onclick="showCustomerDetail(${customer.id})" oncontextmenu="openRowContextMenu(event, ${customer.id}, '${escapeHtml(customer.status || '')}')" onmouseenter="expandRow(this)" onmouseleave="collapseRow(this)">
                 <td>
                     <strong>${escapeHtml(customer.company_name)}</strong>
                     ${customer.status === 'Planning' ? '<span class="status-icon planning"></span>' : ''}
@@ -167,6 +363,85 @@ function renderCustomers() {
     }).join('');
 }
 
+function wireContextMenu() {
+    const menu = document.getElementById('rowContextMenu');
+    if (!menu) return;
+
+    // Handle clicks on menu items
+    menu.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.context-menu-item');
+        if (!btn) return;
+        const action = btn.getAttribute('data-action');
+        if (!contextCustomerId) return;
+
+        const selectedCustomerId = contextCustomerId;
+
+        let status = null;
+        if (action === 'cancelled') status = 'Cancelled';
+        if (action === 'pending') status = 'Pending Plan';
+        if (action === 'onhold') status = 'On Hold';
+        if (action === 'delete') {
+            hideContextMenu();
+            await deleteCustomer(selectedCustomerId);
+            return;
+        }
+
+        hideContextMenu();
+        if (!status) return;
+        await updateCustomerStatus(contextCustomerId, status, { silent: true });
+    });
+
+    // Close menu on outside click / scroll / resize / escape
+    document.addEventListener('click', hideContextMenu);
+    document.addEventListener('scroll', hideContextMenu, true);
+    window.addEventListener('resize', hideContextMenu);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') hideContextMenu();
+    });
+}
+
+function openRowContextMenu(event, customerId) {
+    event.preventDefault();
+    event.stopPropagation();
+    contextCustomerId = customerId;
+    contextRowEl = event.currentTarget || null;
+    if (contextRowEl) contextRowEl.classList.add('expanded');
+
+    const menu = document.getElementById('rowContextMenu');
+    if (!menu) return;
+
+    const delBtn = menu.querySelector('[data-action="delete"]');
+    if (delBtn) {
+        delBtn.style.display = (currentTab === 'cancelled' || currentTab === 'completed') ? 'block' : 'none';
+    }
+
+    const padding = 10;
+    const { clientX: x, clientY: y } = event;
+
+    menu.style.display = 'block';
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+
+    // measure after display
+    const rect = menu.getBoundingClientRect();
+    let left = x;
+    let top = y;
+    if (left + rect.width + padding > window.innerWidth) left = window.innerWidth - rect.width - padding;
+    if (top + rect.height + padding > window.innerHeight) top = window.innerHeight - rect.height - padding;
+
+    menu.style.left = `${Math.max(padding, left)}px`;
+    menu.style.top = `${Math.max(padding, top)}px`;
+}
+
+function hideContextMenu() {
+    const menu = document.getElementById('rowContextMenu');
+    if (!menu) return;
+    menu.style.display = 'none';
+    contextCustomerId = null;
+    if (contextRowEl) contextRowEl.classList.remove('expanded');
+    contextRowEl = null;
+}
+
 // Expand row on hover
 function expandRow(row) {
     row.classList.add('expanded');
@@ -174,6 +449,9 @@ function expandRow(row) {
 
 // Collapse row on mouse leave
 function collapseRow(row) {
+    const menu = document.getElementById('rowContextMenu');
+    const menuOpen = menu && menu.style.display === 'block';
+    if (menuOpen && contextRowEl === row) return;
     row.classList.remove('expanded');
 }
 
@@ -325,7 +603,7 @@ async function finalizePlan(customerId) {
     }
 }
 
-async function updateCustomerStatus(customerId, status) {
+async function updateCustomerStatus(customerId, status, opts = {}) {
     try {
         const res = await fetch(`${API_BASE}/customers/${customerId}`, {
             method: 'PUT',
@@ -333,9 +611,25 @@ async function updateCustomerStatus(customerId, status) {
             body: JSON.stringify({ status })
         });
         if (!res.ok) throw new Error('Failed to update status');
-        await showCustomerDetail(customerId);
-        await loadCustomers();
-        await loadPendingCustomers();
+
+        // If modal is open for this customer, refresh it
+        const modalOpen = document.getElementById('customerDetailModal')?.style?.display === 'block';
+        if (modalOpen) {
+            await showCustomerDetail(customerId);
+        }
+
+        // Refresh current tab
+        if (currentTab === 'pending') {
+            await loadPendingCustomers();
+        } else {
+            await loadCustomersForTab(currentTab);
+        }
+        await refreshSidebar();
+
+        if (!opts.silent) {
+            // eslint-disable-next-line no-alert
+            alert('Status updated');
+        }
     } catch (e) {
         alert(e.message || 'Could not update status');
     }
@@ -698,7 +992,9 @@ async function addCustomer(event) {
 
         if (response.ok) {
             closeAddCustomerModal();
-            await loadCustomers();
+            // New customers start as Pending Plan
+            await switchTab('pending');
+            await refreshSidebar();
             alert('Customer added successfully!');
         } else {
             const error = await response.json();

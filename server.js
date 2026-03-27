@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const session = require('express-session');
 const { getPool, initDb } = require('./db');
 const config = require('./config');
 const path = require('path');
@@ -8,9 +9,45 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || 'dev_secret_change_me',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { sameSite: 'lax' },
+  })
+);
 
 // Initialize database on startup
 initDb().catch(console.error);
+
+// Dummy credentials for now
+const USERS = {
+  admin: { username: 'admin', password: 'admin123', role: 'admin' },
+};
+
+function requireAuth(req, res, next) {
+  if (req.session && req.session.user) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body || {};
+  const u = USERS[String(username || '').toLowerCase()];
+  if (!u || u.password !== password) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  req.session.user = { username: u.username, role: u.role };
+  res.json({ username: u.username, role: u.role });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  res.json({ user: req.session?.user || null });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => res.json({ ok: true }));
+});
 
 // Helper function to calculate years known
 function calculateYearsKnown(firstContactDate) {
@@ -21,6 +58,138 @@ function calculateYearsKnown(firstContactDate) {
   const diffYears = diffTime / (1000 * 60 * 60 * 24 * 365);
   return Math.floor(diffYears);
 }
+
+async function fetchCustomersForTab(conn, tab) {
+  // Tabs requested by UI: active | pending | onhold | cancelled
+  // - active: finalized plan AND status in (Active, Planning, Completed)
+  // - pending: status Pending Plan OR goal plan not finalized/missing
+  // - onhold: status On Hold
+  // - cancelled: status Cancelled
+
+  let where = '1=1';
+  if (tab === 'active') {
+    where =
+      "gp.finalized_at IS NOT NULL AND c.status IN ('Active','Planning')";
+  } else if (tab === 'pending') {
+    where =
+      "c.status = 'Pending Plan' OR gp.id IS NULL OR gp.finalized_at IS NULL";
+  } else if (tab === 'onhold') {
+    where = "c.status = 'On Hold'";
+  } else if (tab === 'cancelled') {
+    where = "c.status = 'Cancelled'";
+  } else if (tab === 'completed') {
+    where = "gp.finalized_at IS NOT NULL AND c.status = 'Completed'";
+  }
+
+  const [customers] = await conn.query(
+    `
+    SELECT 
+      c.*,
+      sc.name as service_category_name,
+      COUNT(DISTINCT ce.employee_id) as employee_count,
+      GROUP_CONCAT(DISTINCT CONCAT(e.first_name, ' ', e.last_name) SEPARATOR ', ') as employee_names,
+      gp.id as goal_plan_id,
+      gp.finalized_at as plan_finalized_at,
+      (SELECT COUNT(*) FROM customer_goal_steps WHERE goal_plan_id = gp.id) as total_steps,
+      (SELECT COUNT(*) FROM customer_goal_steps WHERE goal_plan_id = gp.id AND is_completed = 1) as completed_steps
+    FROM customers c
+    LEFT JOIN customer_goal_plans gp ON gp.customer_id = c.id
+    LEFT JOIN service_categories sc ON c.service_category_id = sc.id
+    LEFT JOIN customer_employees ce ON c.id = ce.customer_id
+    LEFT JOIN employees e ON ce.employee_id = e.id
+    WHERE ${where}
+    GROUP BY c.id, gp.id
+    ORDER BY c.created_at DESC
+    `
+  );
+
+  return customers.map((customer) => {
+    const total = Number(customer.total_steps) || 0;
+    const completed = Number(customer.completed_steps) || 0;
+    const progress_pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+    return {
+      ...customer,
+      years_known: calculateYearsKnown(customer.first_contact_date),
+      progress_pct,
+      total_steps: total,
+      completed_steps: completed,
+    };
+  });
+}
+
+// Tabbed lists (active / pending / onhold / cancelled)
+app.get('/api/customers/tab/:tab', async (req, res) => {
+  try {
+    const conn = await getPool();
+    const tab = String(req.params.tab || '').toLowerCase();
+    if (!['active', 'pending', 'onhold', 'cancelled', 'completed'].includes(tab)) {
+      return res.status(400).json({ error: 'Invalid tab' });
+    }
+    const rows = await fetchCustomersForTab(conn, tab);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching customers for tab:', error);
+    res.status(500).json({ error: 'Failed to fetch customers for tab' });
+  }
+});
+
+async function countCustomersForTab(conn, tab) {
+  let where = '1=1';
+  if (tab === 'active') {
+    where =
+      "gp.finalized_at IS NOT NULL AND c.status IN ('Active','Planning')";
+  } else if (tab === 'pending') {
+    where =
+      "c.status = 'Pending Plan' OR gp.id IS NULL OR gp.finalized_at IS NULL";
+  } else if (tab === 'onhold') {
+    where = "c.status = 'On Hold'";
+  } else if (tab === 'cancelled') {
+    where = "c.status = 'Cancelled'";
+  } else if (tab === 'completed') {
+    where = "gp.finalized_at IS NOT NULL AND c.status = 'Completed'";
+  }
+
+  const [rows] = await conn.query(
+    `
+    SELECT COUNT(DISTINCT c.id) AS count
+    FROM customers c
+    LEFT JOIN customer_goal_plans gp ON gp.customer_id = c.id
+    WHERE ${where}
+    `
+  );
+
+  return Number(rows[0]?.count) || 0;
+}
+
+// Overview counts that match tab logic
+app.get('/api/dashboard/overview', async (req, res) => {
+  try {
+    const conn = await getPool();
+
+    const [totalRows] = await conn.query('SELECT COUNT(*) AS count FROM customers');
+    const totalCustomers = Number(totalRows[0]?.count) || 0;
+
+    const [active, pending, completed, onhold, cancelled] = await Promise.all([
+      countCustomersForTab(conn, 'active'),
+      countCustomersForTab(conn, 'pending'),
+      countCustomersForTab(conn, 'completed'),
+      countCustomersForTab(conn, 'onhold'),
+      countCustomersForTab(conn, 'cancelled')
+    ]);
+
+    res.json({
+      totalCustomers,
+      active,
+      pending,
+      completed,
+      onhold,
+      cancelled
+    });
+  } catch (error) {
+    console.error('Error fetching overview:', error);
+    res.status(500).json({ error: 'Failed to fetch overview' });
+  }
+});
 
 // Get main-table customers only (have finalized goal plan), with progress
 app.get('/api/customers', async (req, res) => {
@@ -255,6 +424,7 @@ app.get('/api/employees', async (req, res) => {
 // Create new customer
 app.post('/api/customers', async (req, res) => {
   try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
     const conn = await getPool();
     const {
       company_name,
@@ -286,6 +456,17 @@ app.post('/api/customers', async (req, res) => {
       'Pending Plan', first_contact_date || null, notes || null
     ]);
 
+    // Log system activity: customer created
+    await conn.query(
+      `
+      INSERT INTO customer_interactions
+        (customer_id, employee_id, actor_username, interaction_type, subject, description, interaction_date)
+      VALUES
+        (?, NULL, ?, 'Note', 'Customer created', 'SYSTEM|CUSTOMER_CREATED', NOW())
+      `,
+      [result.insertId, req.session.user.username]
+    );
+
     res.status(201).json({ id: result.insertId, message: 'Customer created successfully' });
   } catch (error) {
     console.error('Error creating customer:', error);
@@ -296,6 +477,7 @@ app.post('/api/customers', async (req, res) => {
 // Update customer
 app.put('/api/customers/:id', async (req, res) => {
   try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
     const conn = await getPool();
     const customerId = req.params.id;
     const updateFields = req.body;
@@ -315,16 +497,61 @@ app.put('/api/customers/:id', async (req, res) => {
     const setClause = fieldsToUpdate.map(field => `${field} = ?`).join(', ');
     const values = fieldsToUpdate.map(field => updateFields[field]);
 
+    // If status changes, capture old status for activity log + undo.
+    let oldStatus = null;
+    let newStatus = null;
+    if (Object.prototype.hasOwnProperty.call(updateFields, 'status')) {
+      const [rows] = await conn.query('SELECT status FROM customers WHERE id = ? LIMIT 1', [customerId]);
+      oldStatus = rows[0]?.status || null;
+      newStatus = updateFields.status;
+    }
+
     await conn.query(`
       UPDATE customers 
       SET ${setClause}
       WHERE id = ?
     `, [...values, customerId]);
 
-    res.json({ message: 'Customer updated successfully' });
+    let statusChangeInteractionId = null;
+    if (oldStatus && newStatus && oldStatus !== newStatus) {
+      const [ins] = await conn.query(
+        `
+        INSERT INTO customer_interactions
+          (customer_id, employee_id, actor_username, interaction_type, subject, description, interaction_date)
+        VALUES
+          (?, NULL, ?, 'Note', 'Status changed', CONCAT('SYSTEM|STATUS_CHANGE|from=', ?, '|to=', ?), NOW())
+        `,
+        [customerId, req.session.user.username, oldStatus, newStatus]
+      );
+      statusChangeInteractionId = ins.insertId;
+    }
+
+    res.json({ message: 'Customer updated successfully', oldStatus, newStatus, statusChangeInteractionId });
   } catch (error) {
     console.error('Error updating customer:', error);
     res.status(500).json({ error: 'Failed to update customer' });
+  }
+});
+
+// Delete a customer (only allowed for Cancelled/Completed)
+app.delete('/api/customers/:id', async (req, res) => {
+  try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
+    const conn = await getPool();
+    const customerId = req.params.id;
+    const [rows] = await conn.query('SELECT status FROM customers WHERE id = ? LIMIT 1', [customerId]);
+    if (!rows.length) return res.status(404).json({ error: 'Customer not found' });
+
+    const status = rows[0].status;
+    if (status !== 'Cancelled' && status !== 'Completed') {
+      return res.status(400).json({ error: 'Only Cancelled or Completed records can be deleted' });
+    }
+
+    await conn.query('DELETE FROM customers WHERE id = ?', [customerId]);
+    res.json({ message: 'Customer deleted' });
+  } catch (error) {
+    console.error('Error deleting customer:', error);
+    res.status(500).json({ error: 'Failed to delete customer' });
   }
 });
 
@@ -393,6 +620,7 @@ app.get('/api/customers/:id/goal-plan', async (req, res) => {
 
 app.post('/api/customers/:id/goal-plan', async (req, res) => {
   try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
     const conn = await getPool();
     const customerId = req.params.id;
     const [existing] = await conn.query(
@@ -406,6 +634,17 @@ app.post('/api/customers/:id/goal-plan', async (req, res) => {
       'INSERT INTO customer_goal_plans (customer_id) VALUES (?)',
       [customerId]
     );
+
+    await conn.query(
+      `
+      INSERT INTO customer_interactions
+        (customer_id, employee_id, actor_username, interaction_type, subject, description, interaction_date)
+      VALUES
+        (?, NULL, ?, 'Note', 'Goal plan created', 'SYSTEM|GOAL_PLAN_CREATED', NOW())
+      `,
+      [customerId, req.session.user.username]
+    );
+
     res.status(201).json({ id: result.insertId, message: 'Goal plan created' });
   } catch (error) {
     console.error('Error creating goal plan:', error);
@@ -415,6 +654,7 @@ app.post('/api/customers/:id/goal-plan', async (req, res) => {
 
 app.post('/api/customers/:id/goal-plan/steps', async (req, res) => {
   try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
     const conn = await getPool();
     const customerId = req.params.id;
     const { title, description } = req.body;
@@ -435,6 +675,17 @@ app.post('/api/customers/:id/goal-plan/steps', async (req, res) => {
       'INSERT INTO customer_goal_steps (goal_plan_id, title, description, sort_order) VALUES (?, ?, ?, ?)',
       [goalPlanId, title || 'New step', description || null, sortOrder]
     );
+
+    await conn.query(
+      `
+      INSERT INTO customer_interactions
+        (customer_id, employee_id, actor_username, interaction_type, subject, description, interaction_date)
+      VALUES
+        (?, NULL, ?, 'Note', 'Goal step added', CONCAT('SYSTEM|STEP_ADDED|title=', ?), NOW())
+      `,
+      [customerId, req.session.user.username, (title || 'New step')]
+    );
+
     res.status(201).json({ id: result.insertId, message: 'Step added' });
   } catch (error) {
     console.error('Error adding step:', error);
@@ -443,6 +694,7 @@ app.post('/api/customers/:id/goal-plan/steps', async (req, res) => {
 });
 app.put('/api/customers/:id/goal-plan/steps/:stepId', async (req, res) => {
   try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
     const conn = await getPool();
     const customerId = req.params.id;
     const stepId = req.params.stepId;
@@ -480,6 +732,20 @@ app.put('/api/customers/:id/goal-plan/steps/:stepId', async (req, res) => {
       values
     );
 
+    if (is_completed !== undefined) {
+      const [stepRows] = await conn.query('SELECT title FROM customer_goal_steps WHERE id = ? LIMIT 1', [stepId]);
+      const stepTitle = stepRows[0]?.title || 'Step';
+      await conn.query(
+        `
+        INSERT INTO customer_interactions
+          (customer_id, employee_id, actor_username, interaction_type, subject, description, interaction_date)
+        VALUES
+          (?, NULL, ?, 'Note', 'Goal step updated', CONCAT('SYSTEM|STEP_TOGGLED|title=', ?, '|completed=', ?), NOW())
+        `,
+        [customerId, req.session.user.username, stepTitle, is_completed ? '1' : '0']
+      );
+    }
+
     // 🔥 ALWAYS GET LATEST PLAN
     const [plans] = await conn.query(
       'SELECT id FROM customer_goal_plans WHERE customer_id = ? ORDER BY id DESC LIMIT 1',
@@ -503,15 +769,11 @@ app.put('/api/customers/:id/goal-plan/steps/:stepId', async (req, res) => {
       const total = Number(counts[0].total) || 0;
       const completed = Number(counts[0].completed) || 0;
 
-      console.log("Total:", total);
-      console.log("Completed:", completed);
-
       if (total > 0 && completed >= total) {
         await conn.query(
           "UPDATE customers SET status = 'Completed' WHERE id = ?",
           [customerId]
         );
-        console.log("Customer marked as Completed");
       } else {
         await conn.query(
           "UPDATE customers SET status = 'Active' WHERE id = ?",
@@ -531,8 +793,24 @@ app.put('/api/customers/:id/goal-plan/steps/:stepId', async (req, res) => {
 
 app.delete('/api/customers/:id/goal-plan/steps/:stepId', async (req, res) => {
   try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
     const conn = await getPool();
+    const customerId = req.params.id;
+    const stepId = req.params.stepId;
+    const [stepRows] = await conn.query('SELECT title FROM customer_goal_steps WHERE id = ? LIMIT 1', [stepId]);
+    const stepTitle = stepRows[0]?.title || 'Step';
     await conn.query('DELETE FROM customer_goal_steps WHERE id = ?', [req.params.stepId]);
+
+    await conn.query(
+      `
+      INSERT INTO customer_interactions
+        (customer_id, employee_id, actor_username, interaction_type, subject, description, interaction_date)
+      VALUES
+        (?, NULL, ?, 'Note', 'Goal step deleted', CONCAT('SYSTEM|STEP_DELETED|title=', ?), NOW())
+      `,
+      [customerId, req.session.user.username, stepTitle]
+    );
+
     res.json({ message: 'Step deleted' });
   } catch (error) {
     console.error('Error deleting step:', error);
@@ -542,6 +820,7 @@ app.delete('/api/customers/:id/goal-plan/steps/:stepId', async (req, res) => {
 
 app.post('/api/customers/:id/goal-plan/finalize', async (req, res) => {
   try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
     const conn = await getPool();
     const customerId = req.params.id;
     const [plans] = await conn.query(
@@ -566,6 +845,17 @@ app.post('/api/customers/:id/goal-plan/finalize', async (req, res) => {
       "UPDATE customers SET status = 'Active' WHERE id = ?",
       [customerId]
     );
+
+    await conn.query(
+      `
+      INSERT INTO customer_interactions
+        (customer_id, employee_id, actor_username, interaction_type, subject, description, interaction_date)
+      VALUES
+        (?, NULL, ?, 'Note', 'Goal plan finalized', 'SYSTEM|GOAL_PLAN_FINALIZED', NOW())
+      `,
+      [customerId, req.session.user.username]
+    );
+
     res.json({ message: 'Plan finalized; customer is now in main table' });
   } catch (error) {
     console.error('Error finalizing plan:', error);
@@ -605,6 +895,100 @@ app.get('/api/dashboard/stats', async (req, res) => {
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
     res.status(500).json({ error: 'Failed to fetch dashboard statistics' });
+  }
+});
+
+// Recent activity feed (last N interactions across all customers)
+app.get('/api/interactions/recent', async (req, res) => {
+  try {
+    const conn = await getPool();
+    const limit = Math.min(Number(req.query.limit) || 10, 50);
+
+    const [rows] = await conn.query(
+      `
+      SELECT
+        ci.id,
+        ci.customer_id,
+        c.company_name,
+        ci.employee_id,
+        ci.actor_username,
+        CONCAT(e.first_name, ' ', e.last_name) as employee_name,
+        ci.interaction_type,
+        ci.subject,
+        ci.description,
+        ci.interaction_date,
+        CASE WHEN ci.description LIKE 'SYSTEM|STATUS_CHANGE|from=%|to=%' THEN 1 ELSE 0 END as can_undo
+      FROM customer_interactions ci
+      JOIN customers c ON c.id = ci.customer_id
+      LEFT JOIN employees e ON e.id = ci.employee_id
+      ORDER BY ci.interaction_date DESC
+      LIMIT ?
+      `,
+      [limit]
+    );
+
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching recent interactions:', error);
+    res.status(500).json({ error: 'Failed to fetch recent interactions' });
+  }
+});
+
+// Undo a system status change activity
+app.post('/api/interactions/:id/undo', async (req, res) => {
+  try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
+    const conn = await getPool();
+    const interactionId = req.params.id;
+
+    const [rows] = await conn.query(
+      `
+      SELECT id, customer_id, description
+      FROM customer_interactions
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [interactionId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Interaction not found' });
+    }
+
+    const desc = String(rows[0].description || '');
+    if (!desc.startsWith('SYSTEM|STATUS_CHANGE|')) {
+      return res.status(400).json({ error: 'This activity cannot be undone' });
+    }
+
+    // Parse: SYSTEM|STATUS_CHANGE|from=<old>|to=<new>
+    const fromMatch = desc.match(/\\|from=([^|]*)\\|to=/);
+    const toMatch = desc.match(/\\|to=([^|]*)$/);
+    const fromStatus = fromMatch ? fromMatch[1] : null;
+    const toStatus = toMatch ? toMatch[1] : null;
+    if (!fromStatus || !toStatus) {
+      return res.status(400).json({ error: 'Malformed status change activity' });
+    }
+
+    const customerId = rows[0].customer_id;
+
+    // Revert status
+    await conn.query("UPDATE customers SET status = ? WHERE id = ?", [fromStatus, customerId]);
+
+    // Log undo action
+    await conn.query(
+      `
+      INSERT INTO customer_interactions
+        (customer_id, employee_id, actor_username, interaction_type, subject, description, interaction_date)
+      VALUES
+        (?, NULL, ?, 'Note', 'Undo status change', CONCAT('SYSTEM|UNDO_STATUS_CHANGE|from=', ?, '|to=', ?), NOW())
+      `,
+      [customerId, req.session.user.username, toStatus, fromStatus]
+    );
+
+    res.json({ message: 'Undone', customerId, revertedTo: fromStatus });
+  } catch (error) {
+    console.error('Error undoing interaction:', error);
+    res.status(500).json({ error: 'Failed to undo interaction' });
   }
 });
 
