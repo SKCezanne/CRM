@@ -225,6 +225,11 @@ body {
     text-transform: uppercase;
 }
 
+.activity-drawer:hover .activity-drawer-title {
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+
 .activity-drawer-panel {
     position: absolute;
     left: 46px;
@@ -235,6 +240,9 @@ body {
     pointer-events: none;
     padding: 14px;
     transition: opacity 220ms ease;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 
 .activity-drawer:hover .activity-drawer-panel {
@@ -250,6 +258,13 @@ body {
     margin-bottom: 4px;
     font-size: 16px;
     color: #495057;
+}
+
+/* Let activity feed fill the whole drawer height */
+.activity-drawer-panel .recent-activity {
+    max-height: none;
+    flex: 1;
+    min-height: 0; /* required for flex overflow scrolling */
 }
 
 header {
