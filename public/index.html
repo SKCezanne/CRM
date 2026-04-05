@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CRM System - Customer Management</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -25,31 +28,31 @@
                         <div class="value" id="metricTotalCustomers">—</div>
                     </div>
                     <div class="sidebar-stats-grid">
-                        <div class="stat-pill">
+                        <button type="button" class="stat-pill stat-pill-btn" data-tab-target="active" onclick="switchTab('active')" title="Open Active tab">
                             <span class="dot dot-active"></span>
                             <span class="name">Active</span>
                             <span class="count" id="statActive">—</span>
-                        </div>
-                        <div class="stat-pill">
+                        </button>
+                        <button type="button" class="stat-pill stat-pill-btn" data-tab-target="pending" onclick="switchTab('pending')" title="Open Pending tab">
                             <span class="dot dot-pending"></span>
                             <span class="name">Pending</span>
                             <span class="count" id="statPending">—</span>
-                        </div>
-                    <div class="stat-pill">
-                        <span class="dot dot-completed"></span>
-                        <span class="name">Completed</span>
-                        <span class="count" id="statCompleted">—</span>
-                    </div>
-                        <div class="stat-pill">
+                        </button>
+                        <button type="button" class="stat-pill stat-pill-btn" data-tab-target="completed" onclick="switchTab('completed')" title="Open Completed tab">
+                            <span class="dot dot-completed"></span>
+                            <span class="name">Completed</span>
+                            <span class="count" id="statCompleted">—</span>
+                        </button>
+                        <button type="button" class="stat-pill stat-pill-btn" data-tab-target="onhold" onclick="switchTab('onhold')" title="Open On Hold tab">
                             <span class="dot dot-onhold"></span>
                             <span class="name">On Hold</span>
                             <span class="count" id="statOnHold">—</span>
-                        </div>
-                        <div class="stat-pill">
+                        </button>
+                        <button type="button" class="stat-pill stat-pill-btn" data-tab-target="cancelled" onclick="switchTab('cancelled')" title="Open Cancelled tab">
                             <span class="dot dot-cancelled"></span>
                             <span class="name">Cancelled</span>
                             <span class="count" id="statCancelled">—</span>
-                        </div>
+                        </button>
                     </div>
                 </div>
 
@@ -75,70 +78,94 @@
                     <button type="button" class="tab" data-tab="cancelled" onclick="switchTab('cancelled')">Cancelled</button>
                 </div>
 
-                <div id="mainSection" class="tab-panel">
-                    <div class="filters">
-                        <select id="filterStatus" onchange="filterCustomers()">
-                            <option value="">All Statuses</option>
-                            <option value="Pending Plan">Pending Plan</option>
-                            <option value="Planning">Planning</option>
-                            <option value="Active">Active</option>
-                            <option value="On Hold">On Hold</option>
-                            <option value="Completed">Completed</option>
-                            <option value="Cancelled">Cancelled</option>
-                        </select>
-                        <select id="filterPriority" onchange="filterCustomers()">
-                            <option value="">All Priorities</option>
-                            <option value="Low">Low</option>
-                            <option value="Medium">Medium</option>
-                            <option value="High">High</option>
-                            <option value="Critical">Critical</option>
-                        </select>
-                        <input type="text" id="searchInput" placeholder="Search customers..." oninput="filterCustomers()">
+                <div class="main-split">
+                    <div class="command-toolbar-wide">
+                        <div class="command-search-wrap">
+                            <label class="command-search-label" for="commandSearchInput">Command search</label>
+                            <div class="command-search-row">
+                                <span class="command-search-icon" aria-hidden="true">⌕</span>
+                                <input type="text" id="commandSearchInput" class="command-search-input" placeholder='e.g. status: Active, priority: High, company: contains Acme' autocomplete="off" spellcheck="false" />
+                            </div>
+                            <ul id="commandSearchSuggest" class="command-search-suggest" role="listbox" hidden></ul>
+                            <p class="command-search-hint muted">Comma-separated clauses. Use <code>column: operator value</code> — operators: <code>contains</code>, <code>starts</code>, <code>ends</code>, <code>=</code>, <code>!=</code>, <code>&gt;</code>, <code>&lt;</code>, <code>same</code>, <code>@other_column</code> for column refs. Tab accepts a suggestion.</p>
+                        </div>
                     </div>
-                    <div class="table-container">
-                        <table id="customersTable">
-                            <thead>
-                                <tr>
-                                    <th>Company</th>
-                                    <th>Contact</th>
-                                    <th>Service Category</th>
-                                    <th>Progress</th>
-                                    <th>Status</th>
-                                    <th>Priority</th>
-                                    <th>Years Known</th>
-                                    <th>Employees</th>
-                                    <th>Last Contact</th>
-                                </tr>
-                            </thead>
-                            <tbody id="customersTableBody">
-                                <tr>
-                                    <td colspan="9" class="loading">Loading customers...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+                    <div class="main-split-primary">
+                        <div id="mainSection" class="tab-panel">
+                            <div class="filters">
+                                <select id="filterStatus" onchange="runTableFilters()">
+                                    <option value="">All Statuses</option>
+                                    <option value="Pending Plan">Pending Plan</option>
+                                    <option value="Planning">Planning</option>
+                                    <option value="Active">Active</option>
+                                    <option value="On Hold">On Hold</option>
+                                    <option value="Completed">Completed</option>
+                                    <option value="Cancelled">Cancelled</option>
+                                </select>
+                                <select id="filterPriority" onchange="runTableFilters()">
+                                    <option value="">All Priorities</option>
+                                    <option value="Low">Low</option>
+                                    <option value="Medium">Medium</option>
+                                    <option value="High">High</option>
+                                    <option value="Critical">Critical</option>
+                                </select>
+                            </div>
+                            <div class="table-container">
+                                <table id="customersTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Company</th>
+                                            <th>Contact</th>
+                                            <th>Service Category</th>
+                                            <th>Progress</th>
+                                            <th>Status</th>
+                                            <th>Priority</th>
+                                            <th>Years Known</th>
+                                            <th>Employees</th>
+                                            <th>Last Contact</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="customersTableBody">
+                                        <tr>
+                                            <td colspan="9" class="loading">Loading customers...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
 
-                <div id="pendingSection" class="tab-panel" style="display: none;">
-                    <div class="table-container">
-                        <table id="pendingTable">
-                            <thead>
-                                <tr>
-                                    <th>Company</th>
-                                    <th>Contact</th>
-                                    <th>Service Category</th>
-                                    <th>Priority</th>
-                                    <th>Created</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="pendingTableBody">
-                                <tr>
-                                    <td colspan="6" class="loading">Loading pending...</td>
-                                </tr>
-                            </tbody>
-                        </table>
+                        <div id="pendingSection" class="tab-panel" style="display: none;">
+                            <div class="table-container">
+                                <table id="pendingTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Company</th>
+                                            <th>Contact</th>
+                                            <th>Service Category</th>
+                                            <th>Priority</th>
+                                            <th>Created</th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="pendingTableBody">
+                                        <tr>
+                                            <td colspan="6" class="loading">Loading pending...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
+
+                    <aside class="main-split-chart" aria-label="Status chart">
+                        <div class="main-chart-card">
+                            <h3>Customers by status</h3>
+                            <p class="muted main-chart-sub">Click overview counts or tabs to filter the table.</p>
+                            <div class="main-chart-canvas-wrap">
+                                <canvas id="statusPieChart" aria-label="Status distribution pie chart"></canvas>
+                            </div>
+                        </div>
+                    </aside>
                 </div>
             </main>
         </div>
@@ -153,6 +180,7 @@
             <div class="activity-drawer-header">
                 <h3>Activity</h3>
                 <div id="activityUserLine" class="muted">—</div>
+                <button type="button" class="btn btn-secondary activity-delete-history" onclick="deleteAllActivityHistory()">Delete history</button>
             </div>
             <div id="recentActivity" class="recent-activity">
                 <div class="muted">Loading…</div>
@@ -230,6 +258,7 @@
         </div>
     </div>
 
+    <script src="search-commands.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

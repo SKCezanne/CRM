@@ -1,9 +1,30 @@
 const API_BASE = '/api';
 
+/** Chart.js styling for dark UI */
+const CHART_TEXT = '#a1a1aa';
+const CHART_GRID = 'rgba(255, 255, 255, 0.06)';
+const chartPluginTheme = {
+    legend: {
+        position: 'bottom',
+        labels: { color: CHART_TEXT, padding: 12, font: { size: 11 } }
+    },
+    tooltip: {
+        backgroundColor: '#1a1a1f',
+        titleColor: '#f4f4f5',
+        bodyColor: '#d4d4d8',
+        borderColor: '#2a2a32',
+        borderWidth: 1
+    }
+};
+
 let allCustomers = [];
 let filteredCustomers = [];
 let pendingCustomers = [];
+let filteredPendingCustomers = [];
+let commandSuggestItems = [];
+let commandSuggestSelected = -1;
 let charts = [];
+let statusPieChart = null;
 let currentTab = 'active';
 let contextCustomerId = null;
 let contextRowEl = null;
@@ -15,6 +36,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadServiceCategories();
     wireContextMenu();
     await refreshSidebar();
+    wireCommandSearch();
     await switchTab('active');
 });
 
@@ -42,13 +64,18 @@ async function switchTab(tab) {
     document.getElementById('mainSection').style.display = tab === 'pending' ? 'none' : 'block';
     document.getElementById('pendingSection').style.display = tab === 'pending' ? 'block' : 'none';
 
+    document.querySelectorAll('.stat-pill-btn').forEach((btn) => {
+        btn.classList.toggle('stat-pill-active', btn.getAttribute('data-tab-target') === tab);
+    });
+
     // Reset filters on tab switch (keeps UX predictable)
     const statusEl = document.getElementById('filterStatus');
     const priorityEl = document.getElementById('filterPriority');
-    const searchEl = document.getElementById('searchInput');
+    const cmdEl = document.getElementById('commandSearchInput');
     if (statusEl) statusEl.value = '';
     if (priorityEl) priorityEl.value = '';
-    if (searchEl) searchEl.value = '';
+    if (cmdEl) cmdEl.value = '';
+    hideCommandSuggest();
 
     if (tab === 'pending') {
         await loadPendingCustomers();
@@ -79,8 +106,7 @@ async function loadCustomersForTab(tab) {
     try {
         const response = await fetch(`${API_BASE}/customers/tab/${tab}`);
         allCustomers = await response.json();
-        filteredCustomers = [...allCustomers];
-        renderCustomers();
+        runTableFilters();
         await refreshSidebar();
     } catch (error) {
         console.error('Error loading customers:', error);
@@ -102,7 +128,7 @@ async function loadPendingCustomers() {
     try {
         const response = await fetch(`${API_BASE}/customers/tab/pending`);
         pendingCustomers = await response.json();
-        renderPendingCustomers();
+        runTableFilters();
         await refreshSidebar();
     } catch (error) {
         console.error('Error loading pending:', error);
@@ -149,8 +175,82 @@ async function loadOverviewStats() {
         if (completedEl) completedEl.textContent = String(data.completed ?? 0);
         if (onHoldEl) onHoldEl.textContent = String(data.onhold ?? 0);
         if (cancelledEl) cancelledEl.textContent = String(data.cancelled ?? 0);
+        updateStatusPieChart(data);
     } catch (_) {
         totalEl.textContent = '—';
+    }
+}
+
+function updateStatusPieChart(data) {
+    const canvas = document.getElementById('statusPieChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    const labels = ['Active', 'Pending', 'Completed', 'On Hold', 'Cancelled'];
+    const values = [
+        Number(data.active) || 0,
+        Number(data.pending) || 0,
+        Number(data.completed) || 0,
+        Number(data.onhold) || 0,
+        Number(data.cancelled) || 0
+    ];
+    const colors = ['#3b82f6', '#eab308', '#22c55e', '#71717a', '#ef4444'];
+
+    if (statusPieChart) {
+        statusPieChart.destroy();
+        statusPieChart = null;
+    }
+
+    const sum = values.reduce((a, b) => a + b, 0);
+    if (sum === 0) {
+        statusPieChart = new Chart(canvas, {
+            type: 'pie',
+            data: {
+                labels: ['No data yet'],
+                datasets: [{ data: [1], backgroundColor: ['#3f3f46'], borderWidth: 0 }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: chartPluginTheme.legend,
+                    tooltip: { enabled: false }
+                }
+            }
+        });
+        return;
+    }
+
+    statusPieChart = new Chart(canvas, {
+        type: 'pie',
+        data: {
+            labels,
+            datasets: [{
+                data: values,
+                backgroundColor: colors,
+                borderWidth: 2,
+                borderColor: '#141417'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: chartPluginTheme
+        }
+    });
+}
+
+async function deleteAllActivityHistory() {
+    if (!confirm('Delete all activity history? This cannot be undone. Customer records are not removed.')) return;
+    try {
+        const res = await fetch(`${API_BASE}/interactions/history`, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        await loadRecentActivity();
+    } catch (e) {
+        alert(e.message || 'Could not delete history');
     }
 }
 
@@ -263,11 +363,16 @@ async function deleteCustomer(customerId) {
 function renderPendingCustomers() {
     const tbody = document.getElementById('pendingTableBody');
     if (!tbody) return;
-    if (pendingCustomers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="loading">No pending customers.</td></tr>';
+    const list = filteredPendingCustomers;
+    if (list.length === 0) {
+        const msg =
+            pendingCustomers.length === 0
+                ? 'No pending customers.'
+                : 'No rows match your filters or command search.';
+        tbody.innerHTML = `<tr><td colspan="6" class="loading">${msg}</td></tr>`;
         return;
     }
-    tbody.innerHTML = pendingCustomers.map(c => `
+    tbody.innerHTML = list.map(c => `
         <tr oncontextmenu="openRowContextMenu(event, ${c.id}, '${escapeHtml(c.status || '')}')">
             <td><strong>${escapeHtml(c.company_name)}</strong></td>
             <td>${escapeHtml(c.contact_name || 'N/A')}</td>
@@ -635,25 +740,298 @@ async function updateCustomerStatus(customerId, status, opts = {}) {
     }
 }
 
-// Filter customers
+const COMMAND_OPS = new Set(['contains', 'starts', 'ends', 'regex', 'same', '=', '!=', '>', '<', '>=', '<=']);
+
+function runTableFilters() {
+    if (typeof window.CrmSearchCommands === 'undefined') {
+        filteredCustomers = [...allCustomers];
+        filteredPendingCustomers = [...pendingCustomers];
+        if (currentTab === 'pending') renderPendingCustomers();
+        else renderCustomers();
+        return;
+    }
+    if (currentTab === 'pending') {
+        const schema = window.CrmSearchCommands.getSearchSchemaForTab('pending');
+        const qEl = document.getElementById('commandSearchInput');
+        const query = qEl ? qEl.value : '';
+        const parsed = window.CrmSearchCommands.parseSearchQuery(query, schema);
+        filteredPendingCustomers = pendingCustomers.filter((r) =>
+            window.CrmSearchCommands.rowMatchesCommands(r, parsed, schema)
+        );
+        renderPendingCustomers();
+    } else {
+        filterCustomers();
+    }
+}
+
+// Filter customers (status / priority dropdowns + command search)
 function filterCustomers() {
-    const statusFilter = document.getElementById('filterStatus').value.toLowerCase();
-    const priorityFilter = document.getElementById('filterPriority').value.toLowerCase();
-    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+    const statusEl = document.getElementById('filterStatus');
+    const priorityEl = document.getElementById('filterPriority');
+    const cmdEl = document.getElementById('commandSearchInput');
+    const statusFilter = (statusEl && statusEl.value) ? statusEl.value.toLowerCase() : '';
+    const priorityFilter = (priorityEl && priorityEl.value) ? priorityEl.value.toLowerCase() : '';
+    const query = cmdEl ? cmdEl.value : '';
 
-    filteredCustomers = allCustomers.filter(customer => {
-        const matchesStatus = !statusFilter || customer.status.toLowerCase() === statusFilter;
-        const matchesPriority = !priorityFilter || customer.priority.toLowerCase() === priorityFilter;
-        const matchesSearch = !searchTerm || 
-            customer.company_name.toLowerCase().includes(searchTerm) ||
-            (customer.contact_name && customer.contact_name.toLowerCase().includes(searchTerm)) ||
-            (customer.email && customer.email.toLowerCase().includes(searchTerm)) ||
-            (customer.service_category_name && customer.service_category_name.toLowerCase().includes(searchTerm));
+    const schema = window.CrmSearchCommands.getSearchSchemaForTab(currentTab);
+    const parsed = window.CrmSearchCommands.parseSearchQuery(query, schema);
 
-        return matchesStatus && matchesPriority && matchesSearch;
+    filteredCustomers = allCustomers.filter((customer) => {
+        const matchesStatus = !statusFilter || (customer.status && customer.status.toLowerCase() === statusFilter);
+        const matchesPriority = !priorityFilter || (customer.priority && customer.priority.toLowerCase() === priorityFilter);
+        if (!(matchesStatus && matchesPriority)) return false;
+        return window.CrmSearchCommands.rowMatchesCommands(customer, parsed, schema);
     });
 
     renderCustomers();
+}
+
+function getCommandClauseBounds(str, cursor) {
+    let clauseStart = 0;
+    let quote = null;
+    const pos = Math.min(Math.max(0, cursor), str.length);
+    for (let i = 0; i < pos; i++) {
+        const c = str[i];
+        if (quote) {
+            if (c === quote) quote = null;
+            continue;
+        }
+        if (c === '"' || c === "'") {
+            quote = c;
+            continue;
+        }
+        if (c === ',') clauseStart = i + 1;
+    }
+    let clauseEnd = str.length;
+    quote = null;
+    for (let i = cursor; i < str.length; i++) {
+        const c = str[i];
+        if (quote) {
+            if (c === quote) quote = null;
+            continue;
+        }
+        if (c === '"' || c === "'") {
+            quote = c;
+            continue;
+        }
+        if (c === ',') {
+            clauseEnd = i;
+            break;
+        }
+    }
+    return { clauseStart, clauseEnd };
+}
+
+function buildValueSuggestions(field, value, valueAbsStart, cursor, schema) {
+    const out = [];
+    const prefix = value;
+    if (field && field.suggest) {
+        window.CrmSearchCommands.getValueSuggestions(field, prefix).forEach((v) => {
+            out.push({
+                label: v.label,
+                insert: v.insert,
+                kind: 'value',
+                replaceStart: valueAbsStart,
+                replaceEnd: cursor
+            });
+        });
+    }
+    if (prefix === '' || prefix.startsWith('@')) {
+        const refP = prefix.startsWith('@') ? prefix.slice(1) : prefix;
+        window.CrmSearchCommands.getColumnSuggestions(refP, schema).forEach((c) => {
+            out.push({
+                label: `@${c.insert}`,
+                insert: `@${c.insert} `,
+                kind: 'ref',
+                replaceStart: valueAbsStart,
+                replaceEnd: cursor
+            });
+        });
+    }
+    return out.slice(0, 14);
+}
+
+function buildCommandSuggestions(value, cursor, schema) {
+    const { clauseStart, clauseEnd } = getCommandClauseBounds(value, cursor);
+    const clause = value.slice(clauseStart, clauseEnd);
+    const inner = Math.min(Math.max(0, cursor - clauseStart), clause.length);
+    const before = clause.slice(0, inner);
+    const ci = before.indexOf(':');
+
+    if (ci === -1) {
+        const trimmed = before.trimEnd();
+        const lastSp = trimmed.lastIndexOf(' ');
+        const wordStartInClause = lastSp === -1 ? 0 : lastSp + 1;
+        const prefix = trimmed.slice(wordStartInClause);
+        const replaceStart = clauseStart + wordStartInClause;
+        const replaceEnd = cursor;
+        return window.CrmSearchCommands.getColumnSuggestions(prefix, schema).map((c) => ({
+            label: c.label,
+            insert: `${c.insert}: `,
+            kind: 'column',
+            replaceStart,
+            replaceEnd
+        }));
+    }
+
+    const lhs = before.slice(0, ci).trimEnd();
+    const rhs = before.slice(ci + 1);
+    const field = window.CrmSearchCommands.resolveColumnKey(lhs, schema);
+    const rhsTrim = rhs.trimStart();
+    const leadSkip = rhs.length - rhsTrim.length;
+    const opStartAbs = clauseStart + ci + 1 + leadSkip;
+
+    if (rhsTrim.length === 0) {
+        return window.CrmSearchCommands.getOperatorSuggestions().map((o) => ({
+            label: o.label,
+            insert: o.insert,
+            kind: 'operator',
+            replaceStart: cursor,
+            replaceEnd: cursor
+        }));
+    }
+
+    const opMatch = rhsTrim.match(/^(\S+)/);
+    const firstTok = opMatch ? opMatch[1] : '';
+    const opLen = firstTok.length;
+    const isOp = COMMAND_OPS.has(firstTok.toLowerCase());
+
+    if (isOp) {
+        const posAfterOpInBefore = ci + 1 + leadSkip + opLen;
+        if (inner <= posAfterOpInBefore) {
+            const pref = firstTok.toLowerCase();
+            let ops = window.CrmSearchCommands.getOperatorSuggestions().filter(
+                (o) => !pref || o.label.toLowerCase().startsWith(pref)
+            );
+            if (ops.length === 0) ops = window.CrmSearchCommands.getOperatorSuggestions();
+            return ops.map((o) => ({
+                label: o.label,
+                insert: o.insert,
+                kind: 'operator',
+                replaceStart: opStartAbs,
+                replaceEnd: cursor
+            }));
+        }
+        const afterOp = rhsTrim.slice(opLen);
+        const valLead = afterOp.length - afterOp.trimStart().length;
+        const valueAbsStart = opStartAbs + opLen + valLead;
+        const valuePrefix = value.slice(valueAbsStart, cursor);
+        return buildValueSuggestions(field, valuePrefix, valueAbsStart, cursor, schema);
+    }
+
+    const valueAbsStart = opStartAbs;
+    const valuePrefix = value.slice(valueAbsStart, cursor);
+    return buildValueSuggestions(field, valuePrefix, valueAbsStart, cursor, schema);
+}
+
+function hideCommandSuggest() {
+    const ul = document.getElementById('commandSearchSuggest');
+    if (!ul) return;
+    ul.hidden = true;
+    ul.innerHTML = '';
+    commandSuggestItems = [];
+    commandSuggestSelected = -1;
+}
+
+function renderCommandSuggestList(items) {
+    const ul = document.getElementById('commandSearchSuggest');
+    if (!ul) return;
+    commandSuggestItems = items;
+    commandSuggestSelected = items.length ? 0 : -1;
+    if (!items.length) {
+        ul.hidden = true;
+        ul.innerHTML = '';
+        return;
+    }
+    ul.hidden = false;
+    ul.innerHTML = items
+        .map(
+            (it, i) =>
+                `<li role="option" data-idx="${i}" aria-selected="${i === 0}">${escapeHtml(it.label)}<span class="suggest-kind">${escapeHtml(it.kind)}</span></li>`
+        )
+        .join('');
+    ul.querySelectorAll('li').forEach((li) => {
+        li.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            const idx = Number(li.getAttribute('data-idx'));
+            applyCommandSuggestion(idx);
+        });
+    });
+}
+
+function updateCommandSuggestHighlight() {
+    const ul = document.getElementById('commandSearchSuggest');
+    if (!ul) return;
+    ul.querySelectorAll('li').forEach((li, i) => {
+        const sel = i === commandSuggestSelected;
+        li.setAttribute('aria-selected', String(sel));
+        if (sel) li.scrollIntoView({ block: 'nearest' });
+    });
+}
+
+function applyCommandSuggestion(index) {
+    const input = document.getElementById('commandSearchInput');
+    if (!input || index < 0 || index >= commandSuggestItems.length) return;
+    const it = commandSuggestItems[index];
+    const v = input.value;
+    const newV = v.slice(0, it.replaceStart) + it.insert + v.slice(it.replaceEnd);
+    input.value = newV;
+    const pos = it.replaceStart + it.insert.length;
+    input.setSelectionRange(pos, pos);
+    hideCommandSuggest();
+    runTableFilters();
+    input.focus();
+}
+
+function updateCommandSuggestions() {
+    const input = document.getElementById('commandSearchInput');
+    if (!input || typeof window.CrmSearchCommands === 'undefined') return;
+    const schema = window.CrmSearchCommands.getSearchSchemaForTab(currentTab);
+    const items = buildCommandSuggestions(input.value, input.selectionStart ?? input.value.length, schema);
+    renderCommandSuggestList(items);
+}
+
+function wireCommandSearch() {
+    const input = document.getElementById('commandSearchInput');
+    const ul = document.getElementById('commandSearchSuggest');
+    if (!input) return;
+
+    input.addEventListener('input', () => {
+        runTableFilters();
+        updateCommandSuggestions();
+    });
+
+    input.addEventListener('click', () => updateCommandSuggestions());
+    input.addEventListener('keyup', (e) => {
+        if (['ArrowUp', 'ArrowDown', 'Tab', 'Enter', 'Escape'].includes(e.key)) return;
+        updateCommandSuggestions();
+    });
+
+    input.addEventListener('keydown', (e) => {
+        if (!ul || ul.hidden || commandSuggestItems.length === 0) {
+            if (e.key === 'Escape') hideCommandSuggest();
+            return;
+        }
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            commandSuggestSelected = Math.min(commandSuggestItems.length - 1, commandSuggestSelected + 1);
+            updateCommandSuggestHighlight();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            commandSuggestSelected = Math.max(0, commandSuggestSelected - 1);
+            updateCommandSuggestHighlight();
+        } else if (e.key === 'Tab' || e.key === 'Enter') {
+            e.preventDefault();
+            applyCommandSuggestion(commandSuggestSelected >= 0 ? commandSuggestSelected : 0);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            hideCommandSuggest();
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!input.contains(e.target) && (!ul || !ul.contains(e.target))) hideCommandSuggest();
+    });
 }
 
 // Show customer detail modal (works for both main and pending customers)
@@ -860,18 +1238,21 @@ function renderCharts(stats) {
                     datasets: [{
                         data: stats.interactionTypes.map(item => item.count),
                         backgroundColor: [
-                            '#667eea',
-                            '#764ba2',
-                            '#f093fb',
-                            '#4facfe',
-                            '#00f2fe',
-                            '#43e97b'
-                        ]
+                            '#3b82f6',
+                            '#22c55e',
+                            '#eab308',
+                            '#a855f7',
+                            '#f97316',
+                            '#71717a'
+                        ],
+                        borderColor: '#141417',
+                        borderWidth: 2
                     }]
                 },
                 options: {
                     responsive: true,
-                    maintainAspectRatio: true
+                    maintainAspectRatio: true,
+                    plugins: chartPluginTheme
                 }
             });
             charts.push(chart1);
@@ -889,8 +1270,8 @@ function renderCharts(stats) {
                     datasets: [{
                         label: 'Interactions',
                         data: stats.monthlyTrend.map(item => item.count),
-                        borderColor: '#667eea',
-                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        borderColor: '#e4e4e7',
+                        backgroundColor: 'rgba(228, 228, 231, 0.08)',
                         tension: 0.4,
                         fill: true
                     }]
@@ -898,9 +1279,16 @@ function renderCharts(stats) {
                 options: {
                     responsive: true,
                     maintainAspectRatio: true,
+                    plugins: chartPluginTheme,
                     scales: {
+                        x: {
+                            ticks: { color: CHART_TEXT },
+                            grid: { color: CHART_GRID }
+                        },
                         y: {
-                            beginAtZero: true
+                            beginAtZero: true,
+                            ticks: { color: CHART_TEXT },
+                            grid: { color: CHART_GRID }
                         }
                     }
                 }
@@ -920,15 +1308,24 @@ function renderCharts(stats) {
                     datasets: [{
                         label: 'Interactions',
                         data: stats.employeeInvolvement.map(item => item.interaction_count),
-                        backgroundColor: '#764ba2'
+                        backgroundColor: '#52525b',
+                        borderColor: '#71717a',
+                        borderWidth: 1
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: true,
+                    plugins: chartPluginTheme,
                     scales: {
+                        x: {
+                            ticks: { color: CHART_TEXT },
+                            grid: { color: CHART_GRID }
+                        },
                         y: {
-                            beginAtZero: true
+                            beginAtZero: true,
+                            ticks: { color: CHART_TEXT },
+                            grid: { color: CHART_GRID }
                         }
                     }
                 }

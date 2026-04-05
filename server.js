@@ -934,6 +934,19 @@ app.get('/api/interactions/recent', async (req, res) => {
   }
 });
 
+// Clear all activity history (does not delete customers)
+app.delete('/api/interactions/history', async (req, res) => {
+  try {
+    if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
+    const conn = await getPool();
+    await conn.query('DELETE FROM customer_interactions');
+    res.json({ message: 'All activity history cleared' });
+  } catch (error) {
+    console.error('Error clearing activity history:', error);
+    res.status(500).json({ error: 'Failed to clear activity history' });
+  }
+});
+
 // Undo a system status change activity
 app.post('/api/interactions/:id/undo', async (req, res) => {
   try {
