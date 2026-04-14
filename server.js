@@ -61,7 +61,7 @@ function calculateYearsKnown(firstContactDate) {
 
 async function fetchCustomersForTab(conn, tab) {
   // Tabs requested by UI: active | pending | onhold | cancelled
-  // - active: finalized plan AND status in (Active, Planning, Completed)
+  // - active: finalized plan AND status Active
   // - pending: status Pending Plan OR goal plan not finalized/missing
   // - onhold: status On Hold
   // - cancelled: status Cancelled

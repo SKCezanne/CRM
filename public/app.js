@@ -29,6 +29,12 @@ let currentTab = 'active';
 let contextCustomerId = null;
 let contextRowEl = null;
 
+function getDisplayStatus(status) {
+    if (status === 'Pending Plan') return 'Pending';
+    if (status === 'Planning') return 'Active';
+    return status || '';
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async () => {
     const authed = await ensureLoggedIn();
@@ -394,7 +400,8 @@ function renderCustomers() {
     }
 
     tbody.innerHTML = filteredCustomers.map(customer => {
-        const statusClass = (customer.status || '').toLowerCase().replace(' ', '');
+        const displayStatus = getDisplayStatus(customer.status);
+        const statusClass = displayStatus.toLowerCase().replace(/\s+/g, '');
         const priorityClass = (customer.priority || '').toLowerCase();
         const lastContact = customer.last_contact_date 
             ? new Date(customer.last_contact_date).toLocaleDateString()
@@ -405,7 +412,6 @@ function renderCustomers() {
             <tr onclick="showCustomerDetail(${customer.id})" oncontextmenu="openRowContextMenu(event, ${customer.id}, '${escapeHtml(customer.status || '')}')" onmouseenter="expandRow(this)" onmouseleave="collapseRow(this)">
                 <td>
                     <strong>${escapeHtml(customer.company_name)}</strong>
-                    ${customer.status === 'Planning' ? '<span class="status-icon planning"></span>' : ''}
                 </td>
                 <td>${escapeHtml(customer.contact_name || 'N/A')}</td>
                 <td>${escapeHtml(customer.service_category_name || 'Uncategorized')}</td>
@@ -415,7 +421,7 @@ function renderCustomers() {
                 </td>
                 <td>
                     <span class="status-badge status-${statusClass}">
-                        ${customer.status}
+                        ${escapeHtml(displayStatus)}
                     </span>
                 </td>
                 <td>
@@ -565,7 +571,7 @@ function renderPendingGoalPlan(customerId, goalPlan, steps) {
         return `
             <div class="customer-detail-section goal-plan-section">
                 <h3>Goal plan</h3>
-                <p>Create a goal plan with steps. Once finalized, this customer will appear in the main table and progress will track completed steps.</p>
+                <p>Create a goal plan with steps. When you click Finish, this customer will move to the Active tab and progress will track completed steps.</p>
                 <button type="button" class="btn btn-primary" onclick="createGoalPlan(${customerId})">Create goal plan</button>
             </div>
         `;
@@ -581,7 +587,7 @@ function renderPendingGoalPlan(customerId, goalPlan, steps) {
                 <button type="button" class="step-delete" onclick="event.stopPropagation(); deleteStep(${customerId}, ${s.id})">Delete</button>
             </li>
         `).join('')}</ul>`
-        : '<p>Add at least one step, then finalize.</p>';
+        : '<p>Add at least one step, then click Finish.</p>';
     return `
         <div class="customer-detail-section goal-plan-section">
             <h3>Goal plan (draft)</h3>
@@ -592,7 +598,7 @@ function renderPendingGoalPlan(customerId, goalPlan, steps) {
                 <button type="button" class="btn btn-primary" onclick="addStep(${customerId})">Add step</button>
             </div>
             <div style="margin-top: 12px;">
-                <button type="button" class="btn btn-primary" onclick="finalizePlan(${customerId})">Finalize plan (move to main table)</button>
+                <button type="button" class="btn btn-primary" onclick="finalizePlan(${customerId})">Finish</button>
             </div>
         </div>
     `;
@@ -702,7 +708,7 @@ async function finalizePlan(customerId) {
         closeCustomerDetail();
         await loadPendingCustomers();
         await loadCustomers();
-        alert('Goal plan finalized. Customer is now in the main table.');
+        alert('Finished. Customer is now in the Active tab.');
     } catch (e) {
         alert(e.message || 'Could not finalize plan');
     }
@@ -1071,9 +1077,8 @@ async function showCustomerDetail(customerId) {
                 <div class="status-update-row">
                     <label>Status:</label>
                     <select id="detailStatusSelect" onchange="updateCustomerStatus(${customerId}, this.value)">
-                        <option value="Pending Plan" ${customer.status === 'Pending Plan' ? 'selected' : ''}>Pending Plan</option>
-                        <option value="Planning" ${customer.status === 'Planning' ? 'selected' : ''}>Planning</option>
-                        <option value="Active" ${customer.status === 'Active' ? 'selected' : ''}>Active</option>
+                        <option value="Pending Plan" ${customer.status === 'Pending Plan' ? 'selected' : ''}>Pending</option>
+                        <option value="Active" ${(customer.status === 'Active' || customer.status === 'Planning') ? 'selected' : ''}>Active</option>
                         <option value="On Hold" ${customer.status === 'On Hold' ? 'selected' : ''}>On Hold</option>
                         <option value="Completed" ${customer.status === 'Completed' ? 'selected' : ''}>Completed</option>
                         <option value="Cancelled" ${customer.status === 'Cancelled' ? 'selected' : ''}>Cancelled</option>
@@ -1087,13 +1092,12 @@ async function showCustomerDetail(customerId) {
             <div class="customer-detail-header">
                 <h2>${escapeHtml(customer.company_name)}</h2>
                 <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <span class="status-badge status-${(customer.status || '').toLowerCase().replace(' ', '')}">
-                        ${customer.status}
+                    <span class="status-badge status-${getDisplayStatus(customer.status).toLowerCase().replace(/\s+/g, '')}">
+                        ${escapeHtml(getDisplayStatus(customer.status))}
                     </span>
                     <span class="priority-badge priority-${(customer.priority || '').toLowerCase()}">
                         ${customer.priority}
                     </span>
-                    ${customer.status === 'Planning' ? '<span class="status-icon planning"></span> <span>Planning in progress</span>' : ''}
                 </div>
             </div>
 
