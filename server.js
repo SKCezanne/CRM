@@ -479,8 +479,12 @@ app.put('/api/customers/:id', async (req, res) => {
   try {
     if (!req.session?.user) return res.status(401).json({ error: 'Unauthorized' });
     const conn = await getPool();
-    const customerId = req.params.id;
+    const customerId = Number.parseInt(req.params.id, 10);
     const updateFields = req.body;
+
+    if (!Number.isInteger(customerId) || customerId <= 0) {
+      return res.status(400).json({ error: 'Invalid customer id' });
+    }
 
     const allowedFields = [
       'company_name', 'contact_name', 'email', 'phone', 'address', 'city',

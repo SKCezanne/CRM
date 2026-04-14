@@ -493,7 +493,7 @@ function wireContextMenu() {
 
         hideContextMenu();
         if (!status) return;
-        await updateCustomerStatus(contextCustomerId, status, { silent: true });
+        await updateCustomerStatus(selectedCustomerId, status, { silent: true });
     });
 
     // Close menu on outside click / scroll / resize / escape
